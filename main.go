@@ -13,6 +13,8 @@ import (
 	"eino_llm_poc/pkg"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/cloudwego/eino/components/prompt"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -48,7 +50,9 @@ func loadConfig(filepath string) (*YAMLConfig, error) {
 	return &config, nil
 }
 
-const INTENT_DETECTION_PROMPT = `
+// getBaseTemplate returns the base template with placeholders
+func getBaseTemplate() string {
+	return `
 -Goal-
 Given a user utterance, detect and extract the user's **intent**, **entities**, **language**, and **sentiment**. You are also provided with pre-declared lists of possible default and additional intents and entities. 
 
@@ -64,24 +68,24 @@ IMPORTANT: Only extract entities that are EXPLICITLY mentioned in the current me
 -Steps-
 1. Identify the **top 3 intent(s)** that match the message. Consider both default_intent and additional_intent lists with their priority scores.
 Format each intent as:
-(intent{tuple_delimiter}<intent_name_in_snake_case>{tuple_delimiter}<confidence>{tuple_delimiter}<priority_score>{tuple_delimiter}<metadata>)
+(intent{TD}<intent_name_in_snake_case>{TD}<confidence>{TD}<priority_score>{TD}<metadata>)
 
 2. Identify all **entities** present in the message, using both default_entity and additional_entity types.
 STRICT RULE: Only extract entities that are LITERALLY PRESENT in the current message text. Do not infer or assume entities from context.
 Format each entity as:
-(entity{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_value>{tuple_delimiter}<confidence>{tuple_delimiter}<metadata>)
+(entity{TD}<entity_type>{TD}<entity_value>{TD}<confidence>{TD}<metadata>)
 
 3. Detect **all languages** present in the message using ISO 3166 Alpha-3 country codes. Return primary language first, followed by additional detected languages. Use 1 for primary language and 0 for contained languages.
 Format each language as:
-(language{tuple_delimiter}<language_code_iso_alpha3>{tuple_delimiter}<confidence>{tuple_delimiter}<primary_flag>{tuple_delimiter}<metadata>)
+(language{TD}<language_code_iso_alpha3>{TD}<confidence>{TD}<primary_flag>{TD}<metadata>)
 
 4. Detect the **sentiment** expressed in the message.
 Format:
-(sentiment{tuple_delimiter}<label>{tuple_delimiter}<confidence>{tuple_delimiter}<metadata>)
+(sentiment{TD}<label>{TD}<confidence>{TD}<metadata>)
 
-5. Return the output as a list separated by **{record_delimiter}**
+5. Return the output as a list separated by **{RD}**
 
-6. When complete, return {completion_delimiter}
+6. When complete, return {CD}
 
 ######################
 -Examples-
@@ -95,20 +99,20 @@ default_entity: location, date
 additional_entity: airline, person
 ######################
 Output:
-(intent{tuple_delimiter}book_flight{tuple_delimiter}0.95{tuple_delimiter}0.9{tuple_delimiter}{{"extracted_from": "default", "context": "travel_booking"}})
-{record_delimiter}
-(intent{tuple_delimiter}track_flight{tuple_delimiter}0.25{tuple_delimiter}0.5{tuple_delimiter}{{"extracted_from": "additional", "context": "travel_inquiry"}})
-{record_delimiter}
-(intent{tuple_delimiter}cancel_flight{tuple_delimiter}0.15{tuple_delimiter}0.7{tuple_delimiter}{{"extracted_from": "default", "context": "travel_cancellation"}})
-{record_delimiter}
-(entity{tuple_delimiter}location{tuple_delimiter}Paris{tuple_delimiter}0.98{tuple_delimiter}{{"entity_position": [25, 30], "entity_category": "geographic"}})
-{record_delimiter}
-(entity{tuple_delimiter}date{tuple_delimiter}next week{tuple_delimiter}0.94{tuple_delimiter}{{"entity_position": [31, 40], "entity_category": "temporal"}})
-{record_delimiter}
-(language{tuple_delimiter}USA{tuple_delimiter}1.0{tuple_delimiter}1{tuple_delimiter}{{"primary_language": true, "script": "latin", "detected_tokens": 9}})
-{record_delimiter}
-(sentiment{tuple_delimiter}neutral{tuple_delimiter}0.80{tuple_delimiter}{{"polarity": 0.1, "subjectivity": 0.3, "emotion": "neutral"}})
-{completion_delimiter}
+(intent{TD}book_flight{TD}0.95{TD}0.9{TD}{{"extracted_from": "default", "context": "travel_booking"}})
+{RD}
+(intent{TD}track_flight{TD}0.25{TD}0.5{TD}{{"extracted_from": "additional", "context": "travel_inquiry"}})
+{RD}
+(intent{TD}cancel_flight{TD}0.15{TD}0.7{TD}{{"extracted_from": "default", "context": "travel_cancellation"}})
+{RD}
+(entity{TD}location{TD}Paris{TD}0.98{TD}{{"entity_position": [25, 30], "entity_category": "geographic"}})
+{RD}
+(entity{TD}date{TD}next week{TD}0.94{TD}{{"entity_position": [31, 40], "entity_category": "temporal"}})
+{RD}
+(language{TD}USA{TD}1.0{TD}1{TD}{{"primary_language": true, "script": "latin", "detected_tokens": 9}})
+{RD}
+(sentiment{TD}neutral{TD}0.80{TD}{{"polarity": 0.1, "subjectivity": 0.3, "emotion": "neutral"}})
+{CD}
 
 ######################
 
@@ -120,40 +124,63 @@ default_entity: product
 additional_entity: brand, color
 ######################
 Output:
-(intent{tuple_delimiter}purchase_intent{tuple_delimiter}0.95{tuple_delimiter}0.8{tuple_delimiter}{{"extracted_from": "default", "context": "shopping_intent"}})
-{record_delimiter}
-(intent{tuple_delimiter}ask_product{tuple_delimiter}0.30{tuple_delimiter}0.6{tuple_delimiter}{{"extracted_from": "additional", "context": "product_inquiry"}})
-{record_delimiter}
-(intent{tuple_delimiter}cancel_order{tuple_delimiter}0.10{tuple_delimiter}0.4{tuple_delimiter}{{"extracted_from": "additional", "context": "order_cancellation"}})
-{record_delimiter}
-(entity{tuple_delimiter}product{tuple_delimiter}รองเท้า{tuple_delimiter}0.97{tuple_delimiter}{{"entity_position": [6, 12], "entity_category": "product", "language": "thai"}})
-{record_delimiter}
-(language{tuple_delimiter}THA{tuple_delimiter}0.85{tuple_delimiter}1{tuple_delimiter}{{"primary_language": true, "script": "thai", "detected_tokens": 2}})
-{record_delimiter}
-(language{tuple_delimiter}USA{tuple_delimiter}0.95{tuple_delimiter}0{tuple_delimiter}{{"primary_language": false, "script": "latin", "detected_tokens": 1}})
-{record_delimiter}
-(sentiment{tuple_delimiter}positive{tuple_delimiter}0.75{tuple_delimiter}{{"polarity": 0.6, "subjectivity": 0.4, "emotion": "desire"}})
-{completion_delimiter}
+(intent{TD}purchase_intent{TD}0.95{TD}0.8{TD}{{"extracted_from": "default", "context": "shopping_intent"}})
+{RD}
+(intent{TD}ask_product{TD}0.30{TD}0.6{TD}{{"extracted_from": "additional", "context": "product_inquiry"}})
+{RD}
+(intent{TD}cancel_order{TD}0.10{TD}0.4{TD}{{"extracted_from": "additional", "context": "order_cancellation"}})
+{RD}
+(entity{TD}product{TD}รองเท้า{TD}0.97{TD}{{"entity_position": [6, 12], "entity_category": "product", "language": "thai"}})
+{RD}
+(language{TD}THA{TD}0.85{TD}1{TD}{{"primary_language": true, "script": "thai", "detected_tokens": 2}})
+{RD}
+(language{TD}USA{TD}0.95{TD}0{TD}{{"primary_language": false, "script": "latin", "detected_tokens": 1}})
+{RD}
+(sentiment{TD}positive{TD}0.75{TD}{{"polarity": 0.6, "subjectivity": 0.4, "emotion": "desire"}})
+{CD}
 
 ######################
 -Real Data-
 ######################
-text: {{input_text}}
-default_intent: {{default_intent}}
-additional_intent: {{additional_intent}}
-default_entity: {{default_entity}}
-additional_entity: {{additional_entity}}
+text: {input_text}
+default_intent: {default_intent}
+additional_intent: {additional_intent}
+default_entity: {default_entity}
+additional_entity: {additional_entity}
 ######################
 Output:
 `
-
-// NLUProcessor handles NLU operations
-type NLUProcessor struct {
-	config pkg.NLUConfig
-	model  openai.ChatModel
 }
 
-// NewNLUProcessor creates a new NLU processor
+// createNLUTemplate creates the Eino ChatTemplate for NLU analysis
+func createNLUTemplate(config pkg.NLUConfig) prompt.ChatTemplate {
+	// Get base template and replace placeholders
+	templateText := getBaseTemplate()
+	templateText = strings.ReplaceAll(templateText, "{TD}", config.TupleDelimiter)
+	templateText = strings.ReplaceAll(templateText, "{RD}", config.RecordDelimiter)
+	templateText = strings.ReplaceAll(templateText, "{CD}", config.CompletionDelimiter)
+
+	// Create messages for the template
+	messages := []schema.MessagesTemplate{
+		schema.SystemMessage("You are an expert NLU system. Follow the instructions precisely and return structured output."),
+		schema.UserMessage(templateText),
+	}
+
+	// Create the ChatTemplate with proper format type
+	template := prompt.FromMessages(schema.FString, messages...)
+
+	return template
+}
+
+// NLUProcessor handles NLU operations using Eino components
+type NLUProcessor struct {
+	config   pkg.NLUConfig
+	model    openai.ChatModel
+	template prompt.ChatTemplate
+	chain    compose.Runnable[map[string]any, *schema.Message]
+}
+
+// NewNLUProcessor creates a new NLU processor with Eino chain composition
 func NewNLUProcessor(ctx context.Context, config pkg.NLUConfig) (*NLUProcessor, error) {
 	maxTokens := config.MaxTokens
 	temperature := float32(config.Temperature)
@@ -171,13 +198,27 @@ func NewNLUProcessor(ctx context.Context, config pkg.NLUConfig) (*NLUProcessor, 
 		return nil, fmt.Errorf("error creating chat model: %v", err)
 	}
 
+	// Create the NLU template with delimiters from config
+	template := createNLUTemplate(config)
+
+	// Create the Eino chain: Template → ChatModel
+	chain, err := compose.NewChain[map[string]any, *schema.Message]().
+		AppendChatTemplate(template).
+		AppendChatModel(model).
+		Compile(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Eino chain: %v", err)
+	}
+
 	return &NLUProcessor{
-		config: config,
-		model:  *model,
+		config:   config,
+		model:    *model,
+		template: template,
+		chain:    chain,
 	}, nil
 }
 
-// Process performs NLU analysis on the input request
+// Process performs NLU analysis using the Eino chain
 func (n *NLUProcessor) Process(ctx context.Context, request pkg.NLURequest) (*pkg.NLUResponse, error) {
 	log.Printf("🧠 Analyzing message with NLU, message_length=%d", len(request.Text))
 	analysisStart := time.Now()
@@ -188,24 +229,16 @@ func (n *NLUProcessor) Process(ctx context.Context, request pkg.NLURequest) (*pk
 	defaultEntities := strings.Join(request.DefaultEntities, ", ")
 	additionalEntities := strings.Join(request.AdditionalEntities, ", ")
 
-	// Create the full prompt by replacing template variables
-	fullPrompt := strings.ReplaceAll(INTENT_DETECTION_PROMPT, "{{input_text}}", request.Text)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{{default_intent}}", defaultIntents)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{{additional_intent}}", additionalIntents)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{{default_entity}}", defaultEntities)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{{additional_entity}}", additionalEntities)
-
-	// Replace delimiter placeholders with actual config values
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{tuple_delimiter}", n.config.TupleDelimiter)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{record_delimiter}", n.config.RecordDelimiter)
-	fullPrompt = strings.ReplaceAll(fullPrompt, "{completion_delimiter}", n.config.CompletionDelimiter)
-
-	// Prepare messages with context
-	messages := []*schema.Message{
-		schema.SystemMessage("You are an expert NLU system. Follow the instructions precisely and return structured output."),
+	// Create template variables for Eino
+	templateVars := map[string]any{
+		"input_text":        request.Text,
+		"default_intent":    defaultIntents,
+		"additional_intent": additionalIntents,
+		"default_entity":    defaultEntities,
+		"additional_entity": additionalEntities,
 	}
 
-	// Add conversation context if provided
+	// Handle conversation context if provided
 	if len(request.ConversationContext) > 0 {
 		contextContent := "<conversation_context>\n"
 		for i, msg := range request.ConversationContext {
@@ -213,33 +246,16 @@ func (n *NLUProcessor) Process(ctx context.Context, request pkg.NLURequest) (*pk
 		}
 		contextContent += "</conversation_context>\n\n"
 		contextContent += fmt.Sprintf("<current_message_to_analyze>\n%s\n</current_message_to_analyze>", request.Text)
-		messages = append(messages, schema.UserMessage(contextContent))
-	} else {
-		messages = append(messages, schema.UserMessage(fullPrompt))
+		templateVars["input_text"] = contextContent
 	}
 
-	// Pretty print NLU Context (matching Python behavior)
-	fmt.Printf("\n%s\n", strings.Repeat("=", 60))
-	fmt.Println("🧠 NLU Analysis Context")
-	fmt.Printf("%s\n", strings.Repeat("=", 60))
-	for i, msg := range messages {
-		role := "UNKNOWN"
-		if msg.Role == schema.System {
-			role = "SYSTEM"
-		} else if msg.Role == schema.User {
-			role = "USER"
-		}
-		fmt.Printf("%d. [%s] %s\n", i+1, role, msg.Content)
-	}
-	fmt.Printf("%s\n", strings.Repeat("=", 60))
-
-	// Generate response
-	out, err := n.model.Generate(ctx, messages)
+	// Execute the Eino chain
+	out, err := n.chain.Invoke(ctx, templateVars)
 	if err != nil {
-		return nil, fmt.Errorf("error generating NLU response: %v", err)
+		return nil, fmt.Errorf("error executing Eino chain: %v", err)
 	}
 
-	// Parse the response
+	// Parse the response from the Eino chain output
 	response, err := n.parseResponse(out.Content)
 	if err != nil {
 		log.Printf("Warning: NLU parsing failed, using fallback: %v", err)
