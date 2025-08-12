@@ -16,7 +16,7 @@ implement_plan.txt
 
 # Output of the go coverage tool
 *.out
-
+*.json
 # Go workspace file
 go.work
 

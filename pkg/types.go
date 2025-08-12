@@ -47,6 +47,7 @@ type ConversationMessage struct {
 // NLURequest contains input data for NLU processing
 type NLURequest struct {
 	Text               string                 `json:"text"`
+	CustomerID         string                 `json:"customer_id,omitempty"`
 	DefaultIntents     []string               `json:"default_intents,omitempty"`
 	AdditionalIntents  []string               `json:"additional_intents,omitempty"`
 	DefaultEntities    []string               `json:"default_entities,omitempty"`
@@ -75,7 +76,6 @@ type NLUConfig struct {
 	BaseURL             string  `json:"base_url"`
 	MaxTokens           int     `json:"max_tokens"`
 	Temperature         float64 `json:"temperature"`
-	ConfidenceThreshold float64 `json:"confidence_threshold"`
 	ImportanceThreshold float64 `json:"importance_threshold"`
 	TupleDelimiter      string  `json:"tuple_delimiter"`
 	RecordDelimiter     string  `json:"record_delimiter"`
@@ -114,4 +114,18 @@ type ParsedTuple struct {
 	Priority   float64               `json:"priority,omitempty"`
 	IsPrimary  bool                   `json:"is_primary,omitempty"`
 	Metadata   map[string]any `json:"metadata"`
+}
+
+// LongtermMemoryEntry represents a memory entry to be stored in JSON
+type LongtermMemoryEntry struct {
+	CustomerID      string       `json:"customer_id"`
+	Timestamp       time.Time    `json:"timestamp"`
+	InputText       string       `json:"input_text"`
+	NLUResponse     *NLUResponse `json:"nlu_response"`
+	ImportanceScore float64      `json:"importance_score"`
+}
+
+// LongtermMemoryStore manages longterm memory persistence
+type LongtermMemoryStore struct {
+	FilePath string `json:"file_path"`
 }

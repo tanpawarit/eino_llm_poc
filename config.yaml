@@ -11,4 +11,4 @@ nlu:
   tuple_delimiter: "<||>"
   record_delimiter: "##"
   completion_delimiter: "<|COMPLETE|>"
-  importance_threshold: 0.35 # Lowered threshold for simplified scoring system - allows more business messages through
+  importance_threshold: 0.6 # Lowered threshold for simplified scoring system - allows more business messages through

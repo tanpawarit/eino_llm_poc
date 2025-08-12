@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"eino_llm_poc/pkg"
 
@@ -154,11 +157,16 @@ Output:`
 
 // createNLUTemplate creates the Eino ChatTemplate for NLU analysis
 func createNLUTemplate(config pkg.NLUConfig) prompt.ChatTemplate {
-	// Get system template and replace placeholders
+	// Get system template and replace placeholders efficiently
 	systemText := getSystemTemplate()
-	systemText = strings.ReplaceAll(systemText, "{TD}", config.TupleDelimiter)
-	systemText = strings.ReplaceAll(systemText, "{RD}", config.RecordDelimiter)
-	systemText = strings.ReplaceAll(systemText, "{CD}", config.CompletionDelimiter)
+
+	// Use strings.Replacer for multiple replacements - more efficient than multiple ReplaceAll calls
+	replacer := strings.NewReplacer(
+		"{TD}", config.TupleDelimiter,
+		"{RD}", config.RecordDelimiter,
+		"{CD}", config.CompletionDelimiter,
+	)
+	systemText = replacer.Replace(systemText)
 
 	// Get user template (no placeholder replacements needed here)
 	userText := getUserTemplate()
@@ -221,8 +229,84 @@ func NewNLUProcessor(ctx context.Context, config pkg.NLUConfig) (*NLUProcessor, 
 	}, nil
 }
 
+// validateNLURequest validates the input request for security and correctness
+func (n *NLUProcessor) validateNLURequest(request pkg.NLURequest) error {
+	// Validate text input
+	if request.Text == "" {
+		return errors.New("input text cannot be empty")
+	}
+
+	// Check text length limits (prevent excessive API costs and processing time)
+	const maxTextLength = 10000 // 10K characters max
+	if len(request.Text) > maxTextLength {
+		return fmt.Errorf("input text too long: %d characters (max: %d)", len(request.Text), maxTextLength)
+	}
+
+	// Validate UTF-8 encoding
+	if !utf8.ValidString(request.Text) {
+		return errors.New("input text contains invalid UTF-8 characters")
+	}
+
+	// Check for potentially malicious content (basic checks)
+	if strings.Contains(request.Text, n.config.TupleDelimiter) {
+		return fmt.Errorf("input text contains reserved delimiter: %s", n.config.TupleDelimiter)
+	}
+	if strings.Contains(request.Text, n.config.RecordDelimiter) {
+		return fmt.Errorf("input text contains reserved delimiter: %s", n.config.RecordDelimiter)
+	}
+	if strings.Contains(request.Text, n.config.CompletionDelimiter) {
+		return fmt.Errorf("input text contains reserved delimiter: %s", n.config.CompletionDelimiter)
+	}
+
+	// Validate intent and entity lists
+	const maxIntentEntities = 50 // Reasonable limit for performance
+	if len(request.DefaultIntents) > maxIntentEntities {
+		return fmt.Errorf("too many default intents: %d (max: %d)", len(request.DefaultIntents), maxIntentEntities)
+	}
+	if len(request.AdditionalIntents) > maxIntentEntities {
+		return fmt.Errorf("too many additional intents: %d (max: %d)", len(request.AdditionalIntents), maxIntentEntities)
+	}
+	if len(request.DefaultEntities) > maxIntentEntities {
+		return fmt.Errorf("too many default entities: %d (max: %d)", len(request.DefaultEntities), maxIntentEntities)
+	}
+	if len(request.AdditionalEntities) > maxIntentEntities {
+		return fmt.Errorf("too many additional entities: %d (max: %d)", len(request.AdditionalEntities), maxIntentEntities)
+	}
+
+	// Validate conversation context
+	const maxContextMessages = 20
+	if len(request.ConversationContext) > maxContextMessages {
+		return fmt.Errorf("too many conversation context messages: %d (max: %d)", len(request.ConversationContext), maxContextMessages)
+	}
+
+	// Validate each conversation message
+	for i, msg := range request.ConversationContext {
+		if msg.Content == "" {
+			return fmt.Errorf("conversation context message %d has empty content", i)
+		}
+		if len(msg.Content) > 1000 { // Reasonable limit for context messages
+			return fmt.Errorf("conversation context message %d too long: %d characters (max: 1000)", i, len(msg.Content))
+		}
+		if !utf8.ValidString(msg.Content) {
+			return fmt.Errorf("conversation context message %d contains invalid UTF-8", i)
+		}
+		// Validate role
+		validRoles := map[string]bool{"user": true, "assistant": true, "system": true}
+		if !validRoles[msg.Role] {
+			return fmt.Errorf("conversation context message %d has invalid role: %s", i, msg.Role)
+		}
+	}
+
+	return nil
+}
+
 // Process performs NLU analysis using the Eino chain
 func (n *NLUProcessor) Process(ctx context.Context, request pkg.NLURequest) (*pkg.NLUResponse, error) {
+	// Validate input request first
+	if err := n.validateNLURequest(request); err != nil {
+		return nil, fmt.Errorf("invalid request: %v", err)
+	}
+
 	log.Printf("🧠 Analyzing message with NLU, message_length=%d", len(request.Text))
 	analysisStart := time.Now()
 
@@ -315,14 +399,14 @@ func (n *NLUProcessor) parseResponse(content string) (*pkg.NLUResponse, error) {
 	records := strings.Split(content, recordDelim)
 
 	for _, record := range records {
-		record = strings.TrimSpace(record)
-		if record == "" || record == n.config.CompletionDelimiter || record == "<|COMPLETE|>" {
+		trimmedRecord := strings.TrimSpace(record)
+		if trimmedRecord == "" || trimmedRecord == n.config.CompletionDelimiter || trimmedRecord == "<|COMPLETE|>" {
 			continue
 		}
 
-		tuple, err := n.parseTuple(record)
+		tuple, err := n.parseTuple(trimmedRecord)
 		if err != nil {
-			log.Printf("Warning: Failed to parse tuple: %s, error: %v", record, err)
+			log.Printf("Warning: Failed to parse tuple: %s, error: %v", trimmedRecord, err)
 			continue
 		}
 
@@ -368,6 +452,21 @@ func (n *NLUProcessor) parseResponse(content string) (*pkg.NLUResponse, error) {
 
 // parseTuple parses a single tuple from the model output
 func (n *NLUProcessor) parseTuple(tupleStr string) (*pkg.ParsedTuple, error) {
+	// Input validation
+	if tupleStr == "" {
+		return nil, errors.New("empty tuple string")
+	}
+
+	// Check for reasonable length limits
+	if len(tupleStr) > 2000 { // Prevent extremely long tuples
+		return nil, fmt.Errorf("tuple string too long: %d characters (max: 2000)", len(tupleStr))
+	}
+
+	// Validate UTF-8
+	if !utf8.ValidString(tupleStr) {
+		return nil, errors.New("tuple contains invalid UTF-8 characters")
+	}
+
 	// Remove parentheses
 	tupleStr = strings.Trim(tupleStr, "()")
 
@@ -380,12 +479,34 @@ func (n *NLUProcessor) parseTuple(tupleStr string) (*pkg.ParsedTuple, error) {
 	// Split by tuple delimiter
 	parts := strings.Split(tupleStr, tupleDelim)
 	if len(parts) < 4 {
-		return nil, fmt.Errorf("invalid tuple format: %s", tupleStr)
+		return nil, fmt.Errorf("invalid tuple format: expected at least 4 parts, got %d in: %s", len(parts), tupleStr)
+	}
+
+	// Validate each part
+	for i, part := range parts {
+		if !utf8.ValidString(part) {
+			return nil, fmt.Errorf("tuple part %d contains invalid UTF-8: %s", i, part)
+		}
+	}
+
+	// Create tuple with validated parts
+	tupleType := strings.TrimSpace(parts[0])
+	tupleName := strings.TrimSpace(parts[1])
+
+	// Validate tuple type
+	validTypes := map[string]bool{"intent": true, "entity": true, "language": true, "sentiment": true}
+	if !validTypes[tupleType] {
+		return nil, fmt.Errorf("invalid tuple type: %s", tupleType)
+	}
+
+	// Validate tuple name is not empty
+	if tupleName == "" {
+		return nil, errors.New("tuple name cannot be empty")
 	}
 
 	tuple := &pkg.ParsedTuple{
-		Type:     strings.TrimSpace(parts[0]),
-		Name:     strings.TrimSpace(parts[1]),
+		Type:     tupleType,
+		Name:     tupleName,
 		Metadata: make(map[string]any),
 	}
 
@@ -441,14 +562,54 @@ func (n *NLUProcessor) parseTuple(tupleStr string) (*pkg.ParsedTuple, error) {
 	return tuple, nil
 }
 
-// parseMetadata parses JSON metadata string
+// parseMetadata parses JSON metadata string with validation
 func (n *NLUProcessor) parseMetadata(metadataStr string, metadata *map[string]any) {
-	if metadataStr != "" {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(metadataStr), &parsed); err == nil {
-			*metadata = parsed
-		}
+	if metadataStr == "" {
+		return
 	}
+
+	// Validate input
+	if len(metadataStr) > 5000 { // Reasonable limit for metadata
+		log.Printf("Warning: Metadata string too long (%d chars), skipping parse", len(metadataStr))
+		return
+	}
+
+	if !utf8.ValidString(metadataStr) {
+		log.Printf("Warning: Metadata contains invalid UTF-8, skipping parse")
+		return
+	}
+
+	// Basic JSON structure validation
+	metadataStr = strings.TrimSpace(metadataStr)
+	if !strings.HasPrefix(metadataStr, "{") || !strings.HasSuffix(metadataStr, "}") {
+		log.Printf("Warning: Metadata not in JSON object format, skipping parse")
+		return
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(metadataStr), &parsed); err != nil {
+		log.Printf("Warning: Failed to parse metadata JSON: %v", err)
+		return
+	}
+
+	// Validate parsed metadata size
+	if len(parsed) > 50 { // Reasonable limit for metadata fields
+		log.Printf("Warning: Too many metadata fields (%d), truncating to 50", len(parsed))
+		// Keep only first 50 fields
+		count := 0
+		truncated := make(map[string]any)
+		for k, v := range parsed {
+			if count >= 50 {
+				break
+			}
+			truncated[k] = v
+			count++
+		}
+		*metadata = truncated
+		return
+	}
+
+	*metadata = parsed
 }
 
 // calculateDerivedFields calculates importance score and sets derived fields
@@ -526,9 +687,62 @@ func (n *NLUProcessor) calculateImportanceScore(response *pkg.NLUResponse) float
 	return score
 }
 
+// saveToLongtermMemory saves NLU response to JSON file
+func (n *NLUProcessor) saveToLongtermMemory(request pkg.NLURequest, response *pkg.NLUResponse) error {
+	// Create longterm memory entry
+	entry := pkg.LongtermMemoryEntry{
+		CustomerID:      request.CustomerID,
+		Timestamp:       response.Timestamp,
+		InputText:       request.Text,
+		NLUResponse:     response,
+		ImportanceScore: response.ImportanceScore,
+	}
+
+	// Ensure data/longterm directory exists
+	longtermDir := "data/longterm"
+	if err := os.MkdirAll(longtermDir, 0755); err != nil {
+		return fmt.Errorf("failed to create longterm directory: %v", err)
+	}
+
+	// Create filename based on customer ID
+	filename := fmt.Sprintf("%s.json", request.CustomerID)
+	filePath := filepath.Join(longtermDir, filename)
+
+	// Check if file already exists to append or create new
+	var entries []pkg.LongtermMemoryEntry
+	if data, err := os.ReadFile(filePath); err == nil {
+		if err := json.Unmarshal(data, &entries); err != nil {
+			log.Printf("Warning: Failed to parse existing longterm file %s: %v", filePath, err)
+			entries = []pkg.LongtermMemoryEntry{} // Start fresh if corrupted
+		}
+	}
+
+	// Append new entry
+	entries = append(entries, entry)
+
+	// Write back to file
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal longterm memory data: %v", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write longterm memory file: %v", err)
+	}
+
+	log.Printf("💾 Saved to longterm memory: %s (customer: %s, importance: %.3f)",
+		filePath, request.CustomerID, response.ImportanceScore)
+	return nil
+}
+
 // ShouldSaveToLongterm determines if NLU analysis should be saved to long-term memory
-func (n *NLUProcessor) ShouldSaveToLongterm(response *pkg.NLUResponse) bool {
-	return response.ImportanceScore >= n.config.ImportanceThreshold
+func (n *NLUProcessor) ShouldSaveToLongterm(request pkg.NLURequest, response *pkg.NLUResponse) error {
+	if response.ImportanceScore >= n.config.ImportanceThreshold {
+		return n.saveToLongtermMemory(request, response)
+	}
+	log.Printf("📝 Not saving to longterm memory: importance %.3f < threshold %.3f",
+		response.ImportanceScore, n.config.ImportanceThreshold)
+	return nil
 }
 
 // GetBusinessInsights extracts business insights from NLU analysis
@@ -613,7 +827,6 @@ func main() {
 		BaseURL:             "https://openrouter.ai/api/v1",
 		MaxTokens:           1500,
 		Temperature:         0.1,
-		ConfidenceThreshold: 0.5,
 		ImportanceThreshold: yamlConfig.NLU.ImportanceThreshold,
 		TupleDelimiter:      yamlConfig.NLU.TupleDelimiter,
 		RecordDelimiter:     yamlConfig.NLU.RecordDelimiter,
@@ -641,6 +854,23 @@ func main() {
 	testRequests := []pkg.NLURequest{
 		{
 			Text:               "สวัสดีครับ อยากซื้อโน้ตบุ๊ครับ",
+			CustomerID:         "tan123",
+			DefaultIntents:     defaultIntents,
+			AdditionalIntents:  additionalIntents,
+			DefaultEntities:    defaultEntities,
+			AdditionalEntities: additionalEntities,
+		},
+		{
+			Text:               "ขอราคาคอมพิวเตอร์หน่อย",
+			CustomerID:         "tan123",
+			DefaultIntents:     defaultIntents,
+			AdditionalIntents:  additionalIntents,
+			DefaultEntities:    defaultEntities,
+			AdditionalEntities: additionalEntities,
+		},
+		{
+			Text:               "ขอบคุณครับ ไม่เอาเเละ",
+			CustomerID:         "tan123",
 			DefaultIntents:     defaultIntents,
 			AdditionalIntents:  additionalIntents,
 			DefaultEntities:    defaultEntities,
@@ -657,6 +887,11 @@ func main() {
 		if err != nil {
 			fmt.Printf("Error processing request: %v\n", err)
 			continue
+		}
+
+		// Check if should save to longterm memory
+		if err := nluProcessor.ShouldSaveToLongterm(request, response); err != nil {
+			log.Printf("Error saving to longterm memory: %v", err)
 		}
 
 		// Pretty print the response
