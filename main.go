@@ -50,9 +50,10 @@ func loadConfig(filepath string) (*YAMLConfig, error) {
 	return &config, nil
 }
 
-// getBaseTemplate returns the base template with placeholders
-func getBaseTemplate() string {
-	return `
+// getSystemTemplate returns the system instructions template with placeholders
+func getSystemTemplate() string {
+	return `You are an expert NLU system. Follow the instructions precisely and return structured output.
+
 -Goal-
 Given a user utterance, detect and extract the user's **intent**, **entities**, **language**, and **sentiment**. You are also provided with pre-declared lists of possible default and additional intents and entities.
 
@@ -137,34 +138,35 @@ Output:
 (language{TD}USA{TD}0.95{TD}0{TD}{{"primary_language": false, "script": "latin", "detected_tokens": 1}})
 {RD}
 (sentiment{TD}positive{TD}0.75{TD}{{"polarity": 0.6, "subjectivity": 0.4, "emotion": "desire"}})
-{CD}
+{CD}`
+}
 
-######################
--Real Data-
-######################
-text: {input_text}
+// getUserTemplate returns the user data template with placeholders
+func getUserTemplate() string {
+	return `text: {input_text}
 default_intent: {default_intent}
 additional_intent: {additional_intent}
 default_entity: {default_entity}
 additional_entity: {additional_entity}
-######################
-Output:
-`
+
+Output:`
 }
 
 // createNLUTemplate creates the Eino ChatTemplate for NLU analysis
 func createNLUTemplate(config pkg.NLUConfig) prompt.ChatTemplate {
-	// Get base template and replace placeholders
-	templateText := getBaseTemplate()
-	templateText = strings.ReplaceAll(templateText, "{TD}", config.TupleDelimiter)
-	templateText = strings.ReplaceAll(templateText, "{RD}", config.RecordDelimiter)
-	templateText = strings.ReplaceAll(templateText, "{CD}", config.CompletionDelimiter)
+	// Get system template and replace placeholders
+	systemText := getSystemTemplate()
+	systemText = strings.ReplaceAll(systemText, "{TD}", config.TupleDelimiter)
+	systemText = strings.ReplaceAll(systemText, "{RD}", config.RecordDelimiter)
+	systemText = strings.ReplaceAll(systemText, "{CD}", config.CompletionDelimiter)
 
-	// Create messages for the template
-	// TODO use templateText as a SystemMessage and UserMessage is a last 5 messages in this session(redis shorterm mem)
+	// Get user template (no placeholder replacements needed here)
+	userText := getUserTemplate()
+
+	// Create messages for the template - SystemMessage for instructions, UserMessage for data
 	messages := []schema.MessagesTemplate{
-		schema.SystemMessage("You are an expert NLU system. Follow the instructions precisely and return structured output."),
-		schema.UserMessage(templateText),
+		schema.SystemMessage(systemText),
+		schema.UserMessage(userText),
 	}
 
 	// Create the ChatTemplate with proper format type
