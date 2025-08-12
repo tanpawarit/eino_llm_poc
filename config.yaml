@@ -5,7 +5,7 @@ nlu:
   
   # Entity configuration for computer sales domain
   default_entity: "product, quantity, brand, price"
-  additional_entity: "color, model, spec, budget, warranty, delivery"
+  additional_entity: "color, model, spec, budget, warranty, delivery, โน้ตบุ๊ค, macbook, apple, lenovo, mouse, เมาส์"
   
   # Delimiter configuration for parsing
   tuple_delimiter: "<||>"

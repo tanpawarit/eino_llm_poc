@@ -40,3 +40,12 @@ flowchart TD
     FinalResponse --> AddResponse[Add Response to SM]
     AddResponse --> Complete([Complete])
 ```
+
+Simple Flow (No Tools)
+
+"สวัสดีครับ" → NLU(greet) → Routing → Response → COMPLETE
+
+Complex Flow (With Tools)
+
+"ขอราคา MacBook" → NLU(ask_price, entity:macbook) → Routing → Response(need_tools) → Tools(product_database + price_lookup) →
+COMPLETE
