@@ -54,7 +54,7 @@ func loadConfig(filepath string) (*YAMLConfig, error) {
 func getBaseTemplate() string {
 	return `
 -Goal-
-Given a user utterance, detect and extract the user's **intent**, **entities**, **language**, and **sentiment**. You are also provided with pre-declared lists of possible default and additional intents and entities. 
+Given a user utterance, detect and extract the user's **intent**, **entities**, **language**, and **sentiment**. You are also provided with pre-declared lists of possible default and additional intents and entities.
 
 STRICT RULES:
 1. You MUST ONLY extract intents/entities that appear in either default or additional lists
@@ -161,6 +161,7 @@ func createNLUTemplate(config pkg.NLUConfig) prompt.ChatTemplate {
 	templateText = strings.ReplaceAll(templateText, "{CD}", config.CompletionDelimiter)
 
 	// Create messages for the template
+	// TODO use templateText as a SystemMessage and UserMessage is a last 5 messages in this session(redis shorterm mem)
 	messages := []schema.MessagesTemplate{
 		schema.SystemMessage("You are an expert NLU system. Follow the instructions precisely and return structured output."),
 		schema.UserMessage(templateText),
