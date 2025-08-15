@@ -1,14 +1,10 @@
 nlu:
-  # Intent configuration for Thai computer sales
-  default_intent: "greet:0.3, purchase_intent:0.8, inquiry_intent:0.7, support_intent:0.6, complain_intent:0.6"
-  additional_intent: "complaint:0.5, cancel_order:0.4, ask_price:0.6, compare_product:0.5"
-  
-  # Entity configuration for computer sales domain
-  default_entity: "product, quantity, brand, price"
-  additional_entity: "color, model, spec, budget, warranty, delivery"
-  
-  # Delimiter configuration for parsing
-  tuple_delimiter: "<||>"
-  record_delimiter: "##"
-  completion_delimiter: "<|COMPLETE|>"
+  model: "openai/gpt-3.5-turbo"
+  max_tokens: 2000
+  temperature: 0.1
   importance_threshold: 0.6 # Lowered threshold for simplified scoring system - allows more business messages through
+  default_intent: "greet:0.3, purchase_intent:0.8, inquiry_intent:0.7, support_intent:0.6, complain_intent:0.6"
+  additional_intent: "complaint:0.5, cancel_order:0.4, ask_price:0.6, compare_product:0.5" 
+  default_entity: "product, quantity, brand, price"
+  additional_entity: "color, model, spec, budget, warranty, delivery" 
+ 
