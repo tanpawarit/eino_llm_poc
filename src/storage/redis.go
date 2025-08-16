@@ -16,12 +16,12 @@ const (
 )
 
 // RedisStorage implements SessionStorage using Redis
-type RedisStorage struct {
+type RedisStorage[T any] struct {
 	client *redis.Client
 }
 
 // NewRedisStorage creates a new Redis storage instance
-func NewRedisStorage(ctx context.Context) (*RedisStorage, error) {
+func NewRedisStorage[T any](ctx context.Context) (*RedisStorage[T], error) {
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
 		return nil, fmt.Errorf("REDIS_URL environment variable is required")
@@ -40,16 +40,16 @@ func NewRedisStorage(ctx context.Context) (*RedisStorage, error) {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	return &RedisStorage{client: client}, nil
+	return &RedisStorage[T]{client: client}, nil
 }
 
 // key generates a Redis key for the given session ID
-func (r *RedisStorage) key(sessionID string) string {
+func (r *RedisStorage[T]) key(sessionID string) string {
 	return sessionPrefix + sessionID
 }
 
 // Set stores session data with TTL
-func (r *RedisStorage) Set(ctx context.Context, sessionID string, data any, ttl time.Duration) error {
+func (r *RedisStorage[T]) Set(ctx context.Context, sessionID string, data T, ttl time.Duration) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal session data: %w", err)
@@ -64,51 +64,56 @@ func (r *RedisStorage) Set(ctx context.Context, sessionID string, data any, ttl 
 }
 
 // SetSession stores session data with the default TTL (convenience method)
-func (r *RedisStorage) SetSession(ctx context.Context, sessionID string, data any) error {
+func (r *RedisStorage[T]) SetSession(ctx context.Context, sessionID string, data T) error {
 	return r.Set(ctx, sessionID, data, SessionTTL)
 }
 
-// Get retrieves session data from Redis
-func (r *RedisStorage) Get(ctx context.Context, sessionID string, dest any) error {
+// Get retrieves session data from Redis and returns it
+func (r *RedisStorage[T]) Get(ctx context.Context, sessionID string) (T, error) {
+	var zero T
 	jsonData, err := r.client.Get(ctx, r.key(sessionID)).Result()
 	if err != nil {
 		if err == redis.Nil {
-			return fmt.Errorf("session not found: %s", sessionID)
+			return zero, fmt.Errorf("session not found: %s", sessionID)
 		}
-		return fmt.Errorf("failed to get session data: %w", err)
+		return zero, fmt.Errorf("failed to get session data: %w", err)
 	}
 
-	err = json.Unmarshal([]byte(jsonData), dest)
+	var result T
+	err = json.Unmarshal([]byte(jsonData), &result)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal session data: %w", err)
+		return zero, fmt.Errorf("failed to unmarshal session data: %w", err)
 	}
 
-	return nil
+	return result, nil
 }
 
 // GetAndTouch read and extend TTL
-func (r *RedisStorage) GetAndTouch(ctx context.Context, sessionID string, dest any) error {
+func (r *RedisStorage[T]) GetAndTouch(ctx context.Context, sessionID string) (T, error) {
+	var zero T
 	cmd := r.client.Do(ctx, "GETEX", r.key(sessionID), "EX", SessionTTL)
 	s, err := cmd.Text()
 	if err != nil {
 		if err == redis.Nil || s == "" {
-			return fmt.Errorf("session not found: %s", sessionID)
+			return zero, fmt.Errorf("session not found: %s", sessionID)
 		}
-		return fmt.Errorf("failed to GETEX: %w", err)
+		return zero, fmt.Errorf("failed to GETEX: %w", err)
 	}
-	if err := json.Unmarshal([]byte(s), dest); err != nil {
-		return fmt.Errorf("failed to unmarshal session data: %w", err)
+
+	var result T
+	if err := json.Unmarshal([]byte(s), &result); err != nil {
+		return zero, fmt.Errorf("failed to unmarshal session data: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
 // GetSession is a convenience method that uses the struct's context
-func (r *RedisStorage) GetSessionData(sessionID string, dest any) error {
-	return r.Get(context.Background(), sessionID, dest)
+func (r *RedisStorage[T]) GetSessionData(sessionID string) (T, error) {
+	return r.Get(context.Background(), sessionID)
 }
 
 // Delete removes session from Redis
-func (r *RedisStorage) Delete(ctx context.Context, sessionID string) error {
+func (r *RedisStorage[T]) Delete(ctx context.Context, sessionID string) error {
 	err := r.client.Del(ctx, r.key(sessionID)).Err()
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w", err)
@@ -117,12 +122,12 @@ func (r *RedisStorage) Delete(ctx context.Context, sessionID string) error {
 }
 
 // DeleteSession is a convenience method
-func (r *RedisStorage) DeleteSession(sessionID string) error {
+func (r *RedisStorage[T]) DeleteSession(sessionID string) error {
 	return r.Delete(context.Background(), sessionID)
 }
 
 // ExtendTTL extends the TTL of a session
-func (r *RedisStorage) ExtendTTL(ctx context.Context, sessionID string, ttl time.Duration) error {
+func (r *RedisStorage[T]) ExtendTTL(ctx context.Context, sessionID string, ttl time.Duration) error {
 	err := r.client.Expire(ctx, r.key(sessionID), ttl).Err()
 	if err != nil {
 		return fmt.Errorf("failed to extend TTL: %w", err)
@@ -131,7 +136,7 @@ func (r *RedisStorage) ExtendTTL(ctx context.Context, sessionID string, ttl time
 }
 
 // Exists checks if a session exists
-func (r *RedisStorage) Exists(ctx context.Context, sessionID string) (bool, error) {
+func (r *RedisStorage[T]) Exists(ctx context.Context, sessionID string) (bool, error) {
 	count, err := r.client.Exists(ctx, r.key(sessionID)).Result()
 	if err != nil {
 		return false, fmt.Errorf("failed to check session existence: %w", err)
@@ -140,12 +145,12 @@ func (r *RedisStorage) Exists(ctx context.Context, sessionID string) (bool, erro
 }
 
 // SessionExists is a convenience method
-func (r *RedisStorage) SessionExists(sessionID string) (bool, error) {
+func (r *RedisStorage[T]) SessionExists(sessionID string) (bool, error) {
 	return r.Exists(context.Background(), sessionID)
 }
 
 // GetTTL gets remaining TTL for a session
-func (r *RedisStorage) GetTTL(ctx context.Context, sessionID string) (time.Duration, error) {
+func (r *RedisStorage[T]) GetTTL(ctx context.Context, sessionID string) (time.Duration, error) {
 	ttl, err := r.client.TTL(ctx, r.key(sessionID)).Result()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get TTL: %w", err)
@@ -154,12 +159,12 @@ func (r *RedisStorage) GetTTL(ctx context.Context, sessionID string) (time.Durat
 }
 
 // Close closes the Redis connection
-func (r *RedisStorage) Close() error {
+func (r *RedisStorage[T]) Close() error {
 	return r.client.Close()
 }
 
 // Ping tests Redis connection
-func (r *RedisStorage) Ping(ctx context.Context) error {
+func (r *RedisStorage[T]) Ping(ctx context.Context) error {
 	_, err := r.client.Ping(ctx).Result()
 	return err
 }

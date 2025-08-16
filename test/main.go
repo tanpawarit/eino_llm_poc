@@ -19,10 +19,10 @@ type Message struct {
 
 // Example session data structure
 type ExampleSessionData struct {
-	UserID       string            `json:"user_id"`
-	Messages     []Message         `json:"messages"`
-	LastActivity time.Time         `json:"last_activity"`
-	Metadata     map[string]any    `json:"metadata"`
+	UserID       string         `json:"user_id"`
+	Messages     []Message      `json:"messages"`
+	LastActivity time.Time      `json:"last_activity"`
+	Metadata     map[string]any `json:"metadata"`
 }
 
 func demoRedisSession() {
