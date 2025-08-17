@@ -8,7 +8,7 @@ import "time"
 type NLUConfig struct {
 	Model               string  `yaml:"model"`
 	MaxTokens           int     `yaml:"max_tokens"`
-	Temperature         float64 `yaml:"temperature"`
+	Temperature         float32 `yaml:"temperature"`
 	ImportanceThreshold float64 `yaml:"importance_threshold"`
 	DefaultIntent       string  `yaml:"default_intent"`
 	AdditionalIntent    string  `yaml:"additional_intent"`

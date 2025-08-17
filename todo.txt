@@ -1,1 +1,0 @@
-Set Redis generic return type

@@ -91,15 +91,13 @@ func (r *RedisStorage[T]) Get(ctx context.Context, sessionID string) (T, error) 
 // GetAndTouch read and extend TTL
 func (r *RedisStorage[T]) GetAndTouch(ctx context.Context, sessionID string) (T, error) {
 	var zero T
-	cmd := r.client.Do(ctx, "GETEX", r.key(sessionID), "EX", SessionTTL)
-	s, err := cmd.Text()
+	s, err := r.client.GetEx(ctx, r.key(sessionID), SessionTTL).Result()
 	if err != nil {
-		if err == redis.Nil || s == "" {
+		if err == redis.Nil {
 			return zero, fmt.Errorf("session not found: %s", sessionID)
 		}
-		return zero, fmt.Errorf("failed to GETEX: %w", err)
+		return zero, fmt.Errorf("failed to GetEx: %w", err)
 	}
-
 	var result T
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
 		return zero, fmt.Errorf("failed to unmarshal session data: %w", err)
