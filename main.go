@@ -53,7 +53,6 @@ func main() {
 
 	ctx := context.Background()
 	chatModel, err := openai.NewChatModel(ctx, config)
-	_ = chatModel
 	if err != nil {
 		fmt.Printf("Error creating model: %v\n", err)
 		return
@@ -61,13 +60,34 @@ func main() {
 
 	g := compose.NewGraph[QueryInput, QueryOutput]()
 
+	// Add transformation node to convert QueryInput to map[string]any
+	inputTransform := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (map[string]any, error) {
+		return map[string]any{
+			"input_text": input.Query,
+		}, nil
+	})
+
 	// Test the NLU template with config values
 	testInput := "สวัสดีครับ อยากซื้อรองเท้า"
 	nluTemplate := nlu.CreateNLUTemplateFromConfig(testInput, &yamlConfig.NLUConfig)
-	g.AddChatTemplateNode("nlu_tmpl", nluTemplate)
 
-	g.AddEdge(compose.START, "nlu_tmpl")
-	g.AddEdge("nlu_tmpl", compose.END)
+	// Add node to convert chat model output to QueryOutput
+	outputTransform := compose.InvokableLambda(func(ctx context.Context, input *schema.Message) (QueryOutput, error) {
+		return QueryOutput{
+			Response: input.Content,
+		}, nil
+	})
+
+	g.AddLambdaNode("input_transform", inputTransform)
+	g.AddChatTemplateNode("nlu_tmpl", nluTemplate)
+	g.AddChatModelNode("chat_model", chatModel)
+	g.AddLambdaNode("output_transform", outputTransform)
+
+	g.AddEdge(compose.START, "input_transform")
+	g.AddEdge("input_transform", "nlu_tmpl")
+	g.AddEdge("nlu_tmpl", "chat_model")
+	g.AddEdge("chat_model", "output_transform")
+	g.AddEdge("output_transform", compose.END)
 
 	// Compile และทดสอบ
 	runnable, err := g.Compile(ctx)
