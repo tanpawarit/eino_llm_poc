@@ -67,9 +67,16 @@ func main() {
 		}, nil
 	})
 
-	// Test the NLU template with config values
-	testInput := "สวัสดีครับ อยากซื้อรองเท้า"
-	nluTemplate := nlu.CreateNLUTemplateFromConfig(testInput, &yamlConfig.NLUConfig)
+	// Create NLU template as InvokableLambda node
+	nluTemplateFunc := compose.InvokableLambda(func(ctx context.Context, input map[string]any) ([]*schema.Message, error) {
+		inputText, ok := input["input_text"].(string)
+		if !ok {
+			return nil, fmt.Errorf("input_text not found or not a string")
+		}
+
+		template := nlu.CreateNLUTemplateFromConfig(inputText, &yamlConfig.NLUConfig)
+		return template.Format(ctx, input)
+	})
 
 	// Add node to convert chat model output to QueryOutput
 	outputTransform := compose.InvokableLambda(func(ctx context.Context, input *schema.Message) (QueryOutput, error) {
@@ -79,7 +86,7 @@ func main() {
 	})
 
 	g.AddLambdaNode("input_transform", inputTransform)
-	g.AddChatTemplateNode("nlu_tmpl", nluTemplate)
+	g.AddLambdaNode("nlu_tmpl", nluTemplateFunc)
 	g.AddChatModelNode("chat_model", chatModel)
 	g.AddLambdaNode("output_transform", outputTransform)
 
