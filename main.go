@@ -24,9 +24,11 @@ type QueryOutput struct {
 	Response string
 }
 
-type RunState struct {
-	History []*schema.Message `json:"history"`
-}
+const (
+	NodeNLUInputTransform = "InputTransformer"
+	NodeNLUChatModel      = "ChatModel"
+	NodeNLUOutputParser   = "OutputParser"
+)
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -62,22 +64,23 @@ func main() {
 
 	// Create NLU template as InvokableLambda node
 	nluTemplateFunc := compose.InvokableLambda(func(ctx context.Context, input QueryInput) ([]*schema.Message, error) {
-		inputText, ok := input["input_text"].(string)
-		// userText := `<conversation_context>
-		// 	UserMessage(สวัสดีจ้า)
-		// 	AssistantMessage(ดีจ้า)
-		// 	UserMessage(ซื้อของหน่อยจ้า)
-		// 	AssistantMessage(ได้เลยจ้า)
-		// 	</conversation_context>
-		// 	<current_message_to_analyze>
-		// 	UserMessage(คิดเงินได้เลย)
-		// 	</current_message_to_analyze>`
-		if !ok {
-			return nil, fmt.Errorf("input_text not found or not a string")
-		}
+		// Construct the input text with conversation context format
+		NLUinput := `<conversation_context>
+			UserMessage(สวัสดีจ้า)
+			AssistantMessage(ดีจ้า)
+			UserMessage(ซื้อของหน่อยจ้า)
+			AssistantMessage(ได้เลยจ้า)
+			</conversation_context>
+			<current_message_to_analyze>
+			UserMessage(` + input.Query + `)
+			</current_message_to_analyze>`
 
-		template := nlu.CreateNLUTemplateFromConfig(inputText, &yamlConfig.NLUConfig)
-		return template.Format(ctx, input)
+		messages := []*schema.Message{
+			schema.SystemMessage(nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)),
+			schema.UserMessage(NLUinput),
+		}
+		log.Println(messages)
+		return messages, nil
 	})
 
 	// Add node to convert chat model output to QueryOutput
@@ -87,14 +90,14 @@ func main() {
 		}, nil
 	})
 
-	g.AddLambdaNode("nlu_tmpl", nluTemplateFunc)
-	g.AddChatModelNode("chat_model", chatModel)
-	g.AddLambdaNode("output_transform", outputTransform)
+	g.AddLambdaNode(NodeNLUInputTransform, nluTemplateFunc)
+	g.AddChatModelNode(NodeNLUChatModel, chatModel)
+	g.AddLambdaNode(NodeNLUOutputParser, outputTransform)
 
-	g.AddEdge(compose.START, "nlu_tmpl")
-	g.AddEdge("nlu_tmpl", "chat_model")
-	g.AddEdge("chat_model", "output_transform")
-	g.AddEdge("output_transform", compose.END)
+	g.AddEdge(compose.START, NodeNLUInputTransform)
+	g.AddEdge(NodeNLUInputTransform, NodeNLUChatModel)
+	g.AddEdge(NodeNLUChatModel, NodeNLUOutputParser)
+	g.AddEdge(NodeNLUOutputParser, compose.END)
 
 	// Compile และทดสอบ
 	runnable, err := g.Compile(ctx)

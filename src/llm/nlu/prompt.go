@@ -3,9 +3,6 @@ package nlu
 import (
 	"eino_llm_poc/src/model"
 	"strings"
-
-	"github.com/cloudwego/eino/components/prompt"
-	"github.com/cloudwego/eino/schema"
 )
 
 func getSystemTemplate() string {
@@ -101,11 +98,9 @@ func getSystemTemplate() string {
 			{CD}`
 }
 
-func createNLUTemplate(NLUinput string, nluConfig *model.NLUConfig) prompt.ChatTemplate {
-
-	// Get system template and replace placeholders efficiently
+// GetSystemTemplateProcessed returns the processed system template with config values replaced
+func GetSystemTemplateProcessed(nluConfig *model.NLUConfig) string {
 	systemText := getSystemTemplate()
-	// Use strings.Replacer for multiple replacements - more efficient than multiple ReplaceAll calls
 	replacerSystem := strings.NewReplacer(
 		"{TD}", "<||>",
 		"{RD}", "##",
@@ -115,21 +110,5 @@ func createNLUTemplate(NLUinput string, nluConfig *model.NLUConfig) prompt.ChatT
 		"default_entity", nluConfig.DefaultEntity,
 		"additional_entity", nluConfig.AdditionalEntity,
 	)
-	systemText = replacerSystem.Replace(systemText)
-
-	// Create messages for the template - SystemMessage for instructions, UserMessage for data
-	messages := []schema.MessagesTemplate{
-		schema.SystemMessage(systemText),
-		schema.UserMessage(NLUinput),
-	}
-
-	// Create the ChatTemplate with proper format type
-	template := prompt.FromMessages(schema.FString, messages...)
-
-	return template
-}
-
-// CreateNLUTemplateFromConfig creates NLU template using YAML configuration
-func CreateNLUTemplateFromConfig(input string, nluConfig *model.NLUConfig) prompt.ChatTemplate {
-	return createNLUTemplate(input, nluConfig)
+	return replacerSystem.Replace(systemText)
 }
