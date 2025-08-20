@@ -4,6 +4,8 @@ import (
 	"context"
 	"eino_llm_poc/src"
 	"eino_llm_poc/src/llm/nlu"
+	"eino_llm_poc/src/model"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -21,7 +23,9 @@ type QueryInput struct {
 }
 
 type QueryOutput struct {
-	Response string
+	Response   string
+	NLUResult  *model.NLUResponse
+	ParseError error
 }
 
 const (
@@ -83,10 +87,18 @@ func main() {
 		return messages, nil
 	})
 
-	// Add node to convert chat model output to QueryOutput
+	// Add node to parse NLU output using the new parser
 	outputTransform := compose.InvokableLambda(func(ctx context.Context, input *schema.Message) (QueryOutput, error) {
+		// Create NLU processor
+		processor := nlu.NewNLUProcessor()
+
+		// Parse the response content
+		nluResult, parseErr := processor.ParseResponse(input.Content)
+
 		return QueryOutput{
-			Response: input.Content,
+			Response:   input.Content,
+			NLUResult:  nluResult,
+			ParseError: parseErr,
 		}, nil
 	})
 
@@ -121,6 +133,29 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Result: %+v\n", result)
-	fmt.Printf("⏱️ Total time: %v\n", duration)
+	fmt.Printf("Raw Response: %s\n", result.Response)
+
+	if result.ParseError != nil {
+		fmt.Printf("❌ Parse Error: %v\n", result.ParseError)
+	} else if result.NLUResult != nil {
+		fmt.Printf("\n✅ Parsed NLU Response (Raw):\n")
+		fmt.Printf("%s\n", result.Response)
+
+		fmt.Printf("\n✅ Parsed NLU Result (JSON):\n")
+		jsonBytes, err := json.MarshalIndent(result.NLUResult, "", "  ")
+		if err != nil {
+			fmt.Printf("Error marshaling JSON: %v\n", err)
+			fmt.Printf("%+v\n", result.NLUResult)
+		} else {
+			fmt.Printf("%s\n", string(jsonBytes))
+		}
+		// Display Summary Information
+		fmt.Printf("\n📊 Summary:\n")
+		fmt.Printf("  Primary Intent: %s\n", result.NLUResult.PrimaryIntent)
+		fmt.Printf("  Primary Language: %s\n", result.NLUResult.PrimaryLanguage)
+		fmt.Printf("  Importance Score: %.3f\n", result.NLUResult.ImportanceScore)
+		fmt.Printf("  Parsed at: %s\n", result.NLUResult.Timestamp.Format("2006-01-02 15:04:05"))
+	}
+
+	fmt.Printf("\n⏱️ Total time: %v\n", duration)
 }
