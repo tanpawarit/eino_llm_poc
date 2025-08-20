@@ -60,16 +60,18 @@ func main() {
 
 	g := compose.NewGraph[QueryInput, QueryOutput]()
 
-	// Add transformation node to convert QueryInput to map[string]any
-	inputTransform := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (map[string]any, error) {
-		return map[string]any{
-			"input_text": input.Query,
-		}, nil
-	})
-
 	// Create NLU template as InvokableLambda node
-	nluTemplateFunc := compose.InvokableLambda(func(ctx context.Context, input map[string]any) ([]*schema.Message, error) {
+	nluTemplateFunc := compose.InvokableLambda(func(ctx context.Context, input QueryInput) ([]*schema.Message, error) {
 		inputText, ok := input["input_text"].(string)
+		// userText := `<conversation_context>
+		// 	UserMessage(สวัสดีจ้า)
+		// 	AssistantMessage(ดีจ้า)
+		// 	UserMessage(ซื้อของหน่อยจ้า)
+		// 	AssistantMessage(ได้เลยจ้า)
+		// 	</conversation_context>
+		// 	<current_message_to_analyze>
+		// 	UserMessage(คิดเงินได้เลย)
+		// 	</current_message_to_analyze>`
 		if !ok {
 			return nil, fmt.Errorf("input_text not found or not a string")
 		}
@@ -85,13 +87,11 @@ func main() {
 		}, nil
 	})
 
-	g.AddLambdaNode("input_transform", inputTransform)
 	g.AddLambdaNode("nlu_tmpl", nluTemplateFunc)
 	g.AddChatModelNode("chat_model", chatModel)
 	g.AddLambdaNode("output_transform", outputTransform)
 
-	g.AddEdge(compose.START, "input_transform")
-	g.AddEdge("input_transform", "nlu_tmpl")
+	g.AddEdge(compose.START, "nlu_tmpl")
 	g.AddEdge("nlu_tmpl", "chat_model")
 	g.AddEdge("chat_model", "output_transform")
 	g.AddEdge("output_transform", compose.END)
