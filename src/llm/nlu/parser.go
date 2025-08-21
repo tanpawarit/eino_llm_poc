@@ -3,7 +3,6 @@ package nlu
 import (
 	"eino_llm_poc/src/model"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -12,15 +11,26 @@ import (
 	"unicode/utf8"
 )
 
-// ParsedTuple represents a single parsed tuple from the model output
-type ParsedTuple struct {
-	Type       string
-	Name       string
-	Value      string  // For entities
-	Confidence float64
-	Priority   float64 // For intents
-	IsPrimary  bool    // For languages
-	Metadata   map[string]any
+// Constants for parsing configuration
+const (
+	DefaultRecordDelimiter     = "##"
+	DefaultTupleDelimiter      = "<||>"
+	DefaultCompletionDelimiter = "<|COMPLETE|>"
+	MaxTupleLength             = 2000
+	MaxMetadataLength          = 5000
+	MaxMetadataFields          = 50
+)
+
+// RawTuple represents a parsed tuple with string parts
+type RawTuple struct {
+	Type  string
+	Parts []string
+}
+
+// TupleParser interface for type-specific parsing
+type TupleParser interface {
+	Parse(raw *RawTuple) error
+	AddToResponse(response *model.NLUResponse)
 }
 
 // NLUProcessor handles parsing configuration
@@ -35,15 +45,267 @@ type ProcessorConfig struct {
 	CompletionDelimiter string
 }
 
+// Specific parser implementations
+type IntentParser struct {
+	*model.Intent
+}
+
+type EntityParser struct {
+	*model.Entity
+}
+
+type LanguageParser struct {
+	*model.Language
+}
+
+type SentimentParser struct {
+	*model.Sentiment
+}
+
 // NewNLUProcessor creates a new NLU processor with default configuration
 func NewNLUProcessor() *NLUProcessor {
 	return &NLUProcessor{
 		config: &ProcessorConfig{
-			RecordDelimiter:     "##",
-			TupleDelimiter:      "<||>",
-			CompletionDelimiter: "<|COMPLETE|>",
+			RecordDelimiter:     DefaultRecordDelimiter,
+			TupleDelimiter:      DefaultTupleDelimiter,
+			CompletionDelimiter: DefaultCompletionDelimiter,
 		},
 	}
+}
+
+// Validation utility functions
+func validateString(s string, maxLength int, fieldName string) error {
+	if s == "" {
+		return fmt.Errorf("%s cannot be empty", fieldName)
+	}
+	if len(s) > maxLength {
+		return fmt.Errorf("%s too long: %d characters (max: %d)", fieldName, len(s), maxLength)
+	}
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("%s contains invalid UTF-8 characters", fieldName)
+	}
+	return nil
+}
+
+func parseFloat(s string, fieldName string) (float64, error) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %s", fieldName, s)
+	}
+	return value, nil
+}
+
+func parseMetadataJSON(metadataStr string) (map[string]any, error) {
+	if metadataStr == "" {
+		return make(map[string]any), nil
+	}
+
+	if err := validateString(metadataStr, MaxMetadataLength, "metadata"); err != nil {
+		return nil, err
+	}
+
+	metadataStr = strings.TrimSpace(metadataStr)
+	if !strings.HasPrefix(metadataStr, "{") || !strings.HasSuffix(metadataStr, "}") {
+		return nil, fmt.Errorf("metadata not in JSON object format")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(metadataStr), &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse metadata JSON: %v", err)
+	}
+
+	if len(parsed) > MaxMetadataFields {
+		return nil, fmt.Errorf("too many metadata fields: %d (max: %d)", len(parsed), MaxMetadataFields)
+	}
+
+	return parsed, nil
+}
+
+// Parser implementations
+func (p *IntentParser) Parse(raw *RawTuple) error {
+	if len(raw.Parts) < 4 {
+		return fmt.Errorf("intent tuple requires at least 4 parts, got %d", len(raw.Parts))
+	}
+
+	var err error
+	p.Intent.Name = strings.TrimSpace(raw.Parts[1])
+	if err = validateString(p.Intent.Name, 100, "intent name"); err != nil {
+		return err
+	}
+
+	if p.Intent.Confidence, err = parseFloat(raw.Parts[2], "confidence"); err != nil {
+		return err
+	}
+
+	if p.Intent.Priority, err = parseFloat(raw.Parts[3], "priority"); err != nil {
+		return err
+	}
+
+	if len(raw.Parts) >= 5 {
+		if p.Intent.Metadata, err = parseMetadataJSON(raw.Parts[4]); err != nil {
+			return err
+		}
+	} else {
+		p.Intent.Metadata = make(map[string]any)
+	}
+
+	return nil
+}
+
+func (p *IntentParser) AddToResponse(response *model.NLUResponse) {
+	response.Intents = append(response.Intents, *p.Intent)
+}
+
+func (p *EntityParser) Parse(raw *RawTuple) error {
+	if len(raw.Parts) < 4 {
+		return fmt.Errorf("entity tuple requires at least 4 parts, got %d", len(raw.Parts))
+	}
+
+	var err error
+	p.Entity.Type = strings.TrimSpace(raw.Parts[1])
+	if err = validateString(p.Entity.Type, 100, "entity type"); err != nil {
+		return err
+	}
+
+	p.Entity.Value = strings.TrimSpace(raw.Parts[2])
+	if err = validateString(p.Entity.Value, 500, "entity value"); err != nil {
+		return err
+	}
+
+	if p.Entity.Confidence, err = parseFloat(raw.Parts[3], "confidence"); err != nil {
+		return err
+	}
+
+	if len(raw.Parts) >= 5 {
+		if p.Entity.Metadata, err = parseMetadataJSON(raw.Parts[4]); err != nil {
+			return err
+		}
+	} else {
+		p.Entity.Metadata = make(map[string]any)
+	}
+
+	// Extract position from metadata if available
+	if pos, ok := p.Entity.Metadata["entity_position"].([]interface{}); ok && len(pos) == 2 {
+		if start, ok1 := pos[0].(float64); ok1 {
+			if end, ok2 := pos[1].(float64); ok2 {
+				p.Entity.Position = []int{int(start), int(end)}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (p *EntityParser) AddToResponse(response *model.NLUResponse) {
+	response.Entities = append(response.Entities, *p.Entity)
+}
+
+func (p *LanguageParser) Parse(raw *RawTuple) error {
+	if len(raw.Parts) < 4 {
+		return fmt.Errorf("language tuple requires at least 4 parts, got %d", len(raw.Parts))
+	}
+
+	var err error
+	p.Language.Code = strings.TrimSpace(raw.Parts[1])
+	if err = validateString(p.Language.Code, 10, "language code"); err != nil {
+		return err
+	}
+
+	if p.Language.Confidence, err = parseFloat(raw.Parts[2], "confidence"); err != nil {
+		return err
+	}
+
+	// Parse primary language flag: "1" means this is the primary language, "0" or other means secondary
+	primaryFlag := strings.TrimSpace(raw.Parts[3])
+	p.Language.IsPrimary = primaryFlag == "1"
+
+	if len(raw.Parts) >= 5 {
+		if p.Language.Metadata, err = parseMetadataJSON(raw.Parts[4]); err != nil {
+			return err
+		}
+	} else {
+		p.Language.Metadata = make(map[string]any)
+	}
+
+	return nil
+}
+
+func (p *LanguageParser) AddToResponse(response *model.NLUResponse) {
+	response.Languages = append(response.Languages, *p.Language)
+}
+
+func (p *SentimentParser) Parse(raw *RawTuple) error {
+	if len(raw.Parts) < 3 {
+		return fmt.Errorf("sentiment tuple requires at least 3 parts, got %d", len(raw.Parts))
+	}
+
+	var err error
+	p.Sentiment.Label = strings.TrimSpace(raw.Parts[1])
+	if err = validateString(p.Sentiment.Label, 50, "sentiment label"); err != nil {
+		return err
+	}
+
+	if p.Sentiment.Confidence, err = parseFloat(raw.Parts[2], "confidence"); err != nil {
+		return err
+	}
+
+	if len(raw.Parts) >= 4 {
+		if p.Sentiment.Metadata, err = parseMetadataJSON(raw.Parts[3]); err != nil {
+			return err
+		}
+	} else {
+		p.Sentiment.Metadata = make(map[string]any)
+	}
+
+	return nil
+}
+
+func (p *SentimentParser) AddToResponse(response *model.NLUResponse) {
+	response.Sentiment = *p.Sentiment
+}
+
+// Factory function to create appropriate parser based on tuple type
+// Returns the specific parser implementation for the given tuple type
+func createParser(tupleType string) (TupleParser, error) {
+	switch tupleType {
+	case "intent":
+		return &IntentParser{Intent: &model.Intent{}}, nil
+	case "entity":
+		return &EntityParser{Entity: &model.Entity{}}, nil
+	case "language":
+		return &LanguageParser{Language: &model.Language{}}, nil
+	case "sentiment":
+		return &SentimentParser{Sentiment: &model.Sentiment{}}, nil
+	default:
+		return nil, fmt.Errorf("unknown tuple type: %s", tupleType)
+	}
+}
+
+// parseRawTuple converts a tuple string into a structured RawTuple
+// Example input: "(intent<||>book_flight<||>0.85<||>0.9<||>{\"context\":\"travel\"})"
+func (n *NLUProcessor) parseRawTuple(tupleStr string) (*RawTuple, error) {
+	if err := validateString(tupleStr, MaxTupleLength, "tuple string"); err != nil {
+		return nil, err
+	}
+
+	// Remove parentheses
+	tupleStr = strings.Trim(tupleStr, "()")
+
+	// Split by tuple delimiter
+	parts := strings.Split(tupleStr, n.config.TupleDelimiter)
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid tuple format: expected at least 3 parts, got %d", len(parts))
+	}
+
+	tupleType := strings.TrimSpace(parts[0])
+	if tupleType == "" {
+		return nil, fmt.Errorf("tuple type cannot be empty")
+	}
+
+	return &RawTuple{
+		Type:  tupleType,
+		Parts: parts,
+	}, nil
 }
 
 // ParseResponse parses the complete model response into structured NLUResponse
@@ -60,61 +322,18 @@ func (n *NLUProcessor) ParseResponse(content string) (*model.NLUResponse, error)
 		Timestamp:       time.Now(),
 	}
 
-	// Use the actual record delimiter from config
-	recordDelim := n.config.RecordDelimiter
-	if !strings.Contains(content, recordDelim) {
-		recordDelim = "##" // fallback to config default
-	}
-
-	// Split by actual record delimiter used in the response
-	records := strings.Split(content, recordDelim)
+	// Split by record delimiter
+	records := strings.Split(content, n.config.RecordDelimiter)
 
 	for _, record := range records {
 		trimmedRecord := strings.TrimSpace(record)
-		if trimmedRecord == "" || trimmedRecord == n.config.CompletionDelimiter || trimmedRecord == "<|COMPLETE|>" {
+		if n.shouldSkipRecord(trimmedRecord) {
 			continue
 		}
 
-		tuple, err := n.parseTuple(trimmedRecord)
-		if err != nil {
+		if err := n.parseRecord(trimmedRecord, response); err != nil {
 			log.Printf("Warning: Failed to parse tuple: %s, error: %v", trimmedRecord, err)
 			continue
-		}
-
-		switch tuple.Type {
-		case "intent":
-			intent := model.Intent{
-				Name:       tuple.Name,
-				Confidence: tuple.Confidence,
-				Priority:   tuple.Priority,
-				Metadata:   tuple.Metadata,
-			}
-			response.Intents = append(response.Intents, intent)
-
-		case "entity":
-			entity := model.Entity{
-				Type:       tuple.Name,
-				Value:      tuple.Value,
-				Confidence: tuple.Confidence,
-				Metadata:   tuple.Metadata,
-			}
-			response.Entities = append(response.Entities, entity)
-
-		case "language":
-			language := model.Language{
-				Code:       tuple.Name,
-				Confidence: tuple.Confidence,
-				IsPrimary:  tuple.IsPrimary,
-				Metadata:   tuple.Metadata,
-			}
-			response.Languages = append(response.Languages, language)
-
-		case "sentiment":
-			response.Sentiment = model.Sentiment{
-				Label:      tuple.Name,
-				Confidence: tuple.Confidence,
-				Metadata:   tuple.Metadata,
-			}
 		}
 	}
 
@@ -124,166 +343,33 @@ func (n *NLUProcessor) ParseResponse(content string) (*model.NLUResponse, error)
 	return response, nil
 }
 
-// parseTuple parses a single tuple from the model output
-func (n *NLUProcessor) parseTuple(tupleStr string) (*ParsedTuple, error) {
-	// Input validation
-	if tupleStr == "" {
-		return nil, errors.New("empty tuple string")
-	}
-
-	// Check for reasonable length limits
-	if len(tupleStr) > 2000 { // Prevent extremely long tuples
-		return nil, fmt.Errorf("tuple string too long: %d characters (max: 2000)", len(tupleStr))
-	}
-
-	// Validate UTF-8
-	if !utf8.ValidString(tupleStr) {
-		return nil, errors.New("tuple contains invalid UTF-8 characters")
-	}
-
-	// Remove parentheses
-	tupleStr = strings.Trim(tupleStr, "()")
-
-	// Use the actual tuple delimiter from config
-	tupleDelim := n.config.TupleDelimiter
-	if !strings.Contains(tupleStr, tupleDelim) {
-		tupleDelim = "<||>" // fallback to config default
-	}
-
-	// Split by tuple delimiter
-	parts := strings.Split(tupleStr, tupleDelim)
-	if len(parts) < 4 {
-		return nil, fmt.Errorf("invalid tuple format: expected at least 4 parts, got %d in: %s", len(parts), tupleStr)
-	}
-
-	// Validate each part
-	for i, part := range parts {
-		if !utf8.ValidString(part) {
-			return nil, fmt.Errorf("tuple part %d contains invalid UTF-8: %s", i, part)
-		}
-	}
-
-	// Create tuple with validated parts
-	tupleType := strings.TrimSpace(parts[0])
-	tupleName := strings.TrimSpace(parts[1])
-
-	// Validate tuple type
-	validTypes := map[string]bool{"intent": true, "entity": true, "language": true, "sentiment": true}
-	if !validTypes[tupleType] {
-		return nil, fmt.Errorf("invalid tuple type: %s", tupleType)
-	}
-
-	// Validate tuple name is not empty
-	if tupleName == "" {
-		return nil, errors.New("tuple name cannot be empty")
-	}
-
-	tuple := &ParsedTuple{
-		Type:     tupleType,
-		Name:     tupleName,
-		Metadata: make(map[string]any),
-	}
-
-	// Parse based on tuple type
-	switch tuple.Type {
-	case "intent":
-		if len(parts) >= 5 {
-			if conf, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64); err == nil {
-				tuple.Confidence = conf
-			}
-			if prio, err := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64); err == nil {
-				tuple.Priority = prio
-			}
-			if len(parts) >= 5 {
-				n.parseMetadata(strings.TrimSpace(parts[4]), &tuple.Metadata)
-			}
-		}
-
-	case "entity":
-		if len(parts) >= 4 {
-			tuple.Value = strings.TrimSpace(parts[2])
-			if conf, err := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64); err == nil {
-				tuple.Confidence = conf
-			}
-			if len(parts) >= 5 {
-				n.parseMetadata(strings.TrimSpace(parts[4]), &tuple.Metadata)
-			}
-		}
-
-	case "language":
-		if len(parts) >= 5 {
-			if conf, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64); err == nil {
-				tuple.Confidence = conf
-			}
-			primaryFlag := strings.TrimSpace(parts[3])
-			tuple.IsPrimary = primaryFlag == "1"
-			if len(parts) >= 5 {
-				n.parseMetadata(strings.TrimSpace(parts[4]), &tuple.Metadata)
-			}
-		}
-
-	case "sentiment":
-		if len(parts) >= 4 {
-			if conf, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64); err == nil {
-				tuple.Confidence = conf
-			}
-			if len(parts) >= 4 {
-				n.parseMetadata(strings.TrimSpace(parts[3]), &tuple.Metadata)
-			}
-		}
-	}
-
-	return tuple, nil
+// shouldSkipRecord determines if a record should be ignored during parsing
+// Skips empty records and completion delimiter markers
+func (n *NLUProcessor) shouldSkipRecord(record string) bool {
+	return record == "" ||
+		record == n.config.CompletionDelimiter ||
+		record == DefaultCompletionDelimiter
 }
 
-// parseMetadata parses JSON metadata string with validation
-func (n *NLUProcessor) parseMetadata(metadataStr string, metadata *map[string]any) {
-	if metadataStr == "" {
-		return
+// parseRecord processes a single tuple record and adds it to the response
+// Orchestrates: raw parsing -> type-specific parsing -> response integration
+func (n *NLUProcessor) parseRecord(record string, response *model.NLUResponse) error {
+	rawTuple, err := n.parseRawTuple(record)
+	if err != nil {
+		return err
 	}
 
-	// Validate input
-	if len(metadataStr) > 5000 { // Reasonable limit for metadata
-		log.Printf("Warning: Metadata string too long (%d chars), skipping parse", len(metadataStr))
-		return
+	parser, err := createParser(rawTuple.Type)
+	if err != nil {
+		return err
 	}
 
-	if !utf8.ValidString(metadataStr) {
-		log.Printf("Warning: Metadata contains invalid UTF-8, skipping parse")
-		return
+	if err := parser.Parse(rawTuple); err != nil {
+		return err
 	}
 
-	// Basic JSON structure validation
-	metadataStr = strings.TrimSpace(metadataStr)
-	if !strings.HasPrefix(metadataStr, "{") || !strings.HasSuffix(metadataStr, "}") {
-		log.Printf("Warning: Metadata not in JSON object format, skipping parse")
-		return
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(metadataStr), &parsed); err != nil {
-		log.Printf("Warning: Failed to parse metadata JSON: %v", err)
-		return
-	}
-
-	// Validate parsed metadata size
-	if len(parsed) > 50 { // Reasonable limit for metadata fields
-		log.Printf("Warning: Too many metadata fields (%d), truncating to 50", len(parsed))
-		// Keep only first 50 fields
-		count := 0
-		truncated := make(map[string]any)
-		for k, v := range parsed {
-			if count >= 50 {
-				break
-			}
-			truncated[k] = v
-			count++
-		}
-		*metadata = truncated
-		return
-	}
-
-	*metadata = parsed
+	parser.AddToResponse(response)
+	return nil
 }
 
 // calculateDerivedFields calculates PrimaryIntent, PrimaryLanguage, and ImportanceScore
@@ -292,7 +378,7 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 	if len(response.Intents) > 0 {
 		highestConfidence := 0.0
 		primaryIntent := ""
-		
+
 		for _, intent := range response.Intents {
 			if intent.Confidence > highestConfidence {
 				highestConfidence = intent.Confidence
@@ -310,12 +396,12 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 				break
 			}
 		}
-		
+
 		// Fallback to highest confidence if no primary found
 		if response.PrimaryLanguage == "" {
 			highestConfidence := 0.0
 			primaryLanguage := ""
-			
+
 			for _, lang := range response.Languages {
 				if lang.Confidence > highestConfidence {
 					highestConfidence = lang.Confidence
@@ -326,22 +412,43 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 		}
 	}
 
-	// Calculate ImportanceScore based on intent confidence and priority
+	// Calculate ImportanceScore using primary intent weighted score
 	if len(response.Intents) > 0 {
-		totalScore := 0.0
-		totalWeight := 0.0
-		
+		// Find primary intent (highest confidence)
+		primary := response.Intents[0]
 		for _, intent := range response.Intents {
-			// Weight combines confidence and priority
-			weight := (intent.Confidence * 0.7) + (intent.Priority * 0.3)
-			score := intent.Confidence * weight
-			
-			totalScore += score
-			totalWeight += weight
+			if intent.Confidence > primary.Confidence {
+				primary = intent
+			}
 		}
-		
-		if totalWeight > 0 {
-			response.ImportanceScore = totalScore / totalWeight
-		}
+
+		// Simple weighted formula: 80% confidence + 20% priority
+		response.ImportanceScore = (primary.Confidence * 0.6) + (primary.Priority * 0.4)
 	}
 }
+
+// calculateDerivedFields - Derived Field Calculation Function
+//
+// Purpose: Computes high-level insights from parsed NLU data using statistical aggregation
+// and business logic integration.
+//
+// Derived Fields & Formulas:
+//
+// 1. PrimaryIntent
+//    Formula: argmax(confidence) over all intents
+//    Logic: Selects intent with highest confidence score
+//    Use: Primary user intention classification
+//
+// 2. PrimaryLanguage
+//    Formula: Priority-based selection with statistical fallback
+//    Logic: if any(language.IsPrimary == true):
+//               return language.Code
+//           else:
+//               return argmax(confidence) over all languages
+//    Use: Primary language identification for processing
+//
+// 3. ImportanceScore
+//    Formula: ImportanceScore = (Confidence × 0.6) + (Priority × 0.4)
+//    Weights: 60% model confidence + 40% business priority
+//    Range: 0.0 to 1.0 (normalized)
+//    Use: Business decision-making and routing priority

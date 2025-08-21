@@ -23,7 +23,6 @@ type QueryInput struct {
 }
 
 type QueryOutput struct {
-	Response   string
 	NLUResult  *model.NLUResponse
 	ParseError error
 }
@@ -96,7 +95,6 @@ func main() {
 		nluResult, parseErr := processor.ParseResponse(input.Content)
 
 		return QueryOutput{
-			Response:   input.Content,
 			NLUResult:  nluResult,
 			ParseError: parseErr,
 		}, nil
@@ -120,7 +118,7 @@ func main() {
 
 	input := QueryInput{
 		CustomerID: "12345",
-		Query:      "สวัสดีครับ อยากซื้อรองเท้า",
+		Query:      "สวัสดี ของไม่มาถึงสักที ",
 	}
 	fmt.Printf("Input: %+v\n", input)
 
@@ -133,13 +131,9 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Raw Response: %s\n", result.Response)
-
 	if result.ParseError != nil {
 		fmt.Printf("❌ Parse Error: %v\n", result.ParseError)
 	} else if result.NLUResult != nil {
-		fmt.Printf("\n✅ Parsed NLU Response (Raw):\n")
-		fmt.Printf("%s\n", result.Response)
 
 		fmt.Printf("\n✅ Parsed NLU Result (JSON):\n")
 		jsonBytes, err := json.MarshalIndent(result.NLUResult, "", "  ")

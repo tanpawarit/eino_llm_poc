@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Code Style Guidelines
+
+### Writing Simple and Readable Code
+- **Simplicity First**: Always choose the simplest solution that works correctly
+- **Readable Code**: Write code that tells a clear story - avoid clever tricks that obscure meaning
+- **Clear Naming**: Use descriptive variable and function names that explain intent
+- **Single Responsibility**: Each function should do one thing well
+- **Minimal Comments**: Code should be self-explanatory; add comments only when necessary to explain "why", not "what"
+- **Consistent Style**: Follow Go conventions and maintain consistency throughout the codebase
+- **Small Functions**: Keep functions short and focused - aim for functions that fit on a single screen
+- **Avoid Deep Nesting**: Use early returns and guard clauses to reduce nesting levels
+
 ## Development Commands
 
 ### Build and Run
