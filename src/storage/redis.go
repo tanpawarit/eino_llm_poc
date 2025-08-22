@@ -63,7 +63,7 @@ func (r *RedisStorage[T]) Set(ctx context.Context, sessionID string, data T, ttl
 	return nil
 }
 
-// SetSession stores session data with the default TTL (convenience method)
+// SetSession stores session data with the default TTL
 func (r *RedisStorage[T]) SetSession(ctx context.Context, sessionID string, data T) error {
 	return r.Set(ctx, sessionID, data, SessionTTL)
 }

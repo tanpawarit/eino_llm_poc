@@ -19,6 +19,10 @@ const (
 	MaxTupleLength             = 2000
 	MaxMetadataLength          = 5000
 	MaxMetadataFields          = 50
+	
+	// Importance score calculation weights
+	ConfidenceWeight           = 0.6
+	PriorityWeight             = 0.4
 )
 
 // RawTuple represents a parsed tuple with string parts
@@ -422,8 +426,8 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 			}
 		}
 
-		// Simple weighted formula: 80% confidence + 20% priority
-		response.ImportanceScore = (primary.Confidence * 0.6) + (primary.Priority * 0.4)
+		// Simple weighted formula: 60% confidence + 40% priority
+		response.ImportanceScore = (primary.Confidence * ConfidenceWeight) + (primary.Priority * PriorityWeight)
 	}
 }
 
@@ -448,7 +452,7 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 //    Use: Primary language identification for processing
 //
 // 3. ImportanceScore
-//    Formula: ImportanceScore = (Confidence × 0.6) + (Priority × 0.4)
+//    Formula: ImportanceScore = (Confidence × ConfidenceWeight) + (Priority × PriorityWeight)
 //    Weights: 60% model confidence + 40% business priority
 //    Range: 0.0 to 1.0 (normalized)
 //    Use: Business decision-making and routing priority

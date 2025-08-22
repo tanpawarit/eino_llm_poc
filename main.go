@@ -5,10 +5,11 @@ import (
 	"eino_llm_poc/src"
 	"eino_llm_poc/src/llm/nlu"
 	"eino_llm_poc/src/model"
-	"encoding/json"
+	"eino_llm_poc/src/storage"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -17,37 +18,60 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type QueryInput struct {
-	CustomerID string
-	Query      string
+type QueryInputWithState struct {
+	CustomerID      string
+	Query           string
+	ConversationCtx string // Pre-built conversation context
 }
 
-type QueryOutput struct {
+type QueryOutputWithState struct {
 	NLUResult  *model.NLUResponse
 	ParseError error
 }
 
+type SessionState struct {
+	CustomerID string
+	History    ConversationHistory
+}
+
+type ConversationHistory struct {
+	Messages []*schema.Message `json:"messages"`
+}
+
 const (
-	NodeNLUInputTransform = "InputTransformer"
-	NodeNLUChatModel      = "ChatModel"
-	NodeNLUOutputParser   = "OutputParser"
+	NodeNLUBuildPrompt = "BuildPrompt"
+	NodeNLUChatModel   = "NLUChatModel"
+	NodeNLUParser      = "ParseNLU"
+	MaxNLUContext      = 5
 )
+
+func trimTail(messages []*schema.Message, maxTurns int) []*schema.Message {
+	if len(messages) <= maxTurns {
+		return messages
+	}
+	return messages[len(messages)-maxTurns:]
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found")
 	}
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	baseURL := os.Getenv("OPENROUTER_BASE_URL")
 	yamlConfig, err := src.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("env Config: %+v\n", apiKey)
-	fmt.Printf("env Config: %+v\n", baseURL)
 	fmt.Printf("NLU Config: %+v\n", yamlConfig.NLUConfig)
 
-	// สร้าง model configuration with NLU config injection
+	// Initialize Redis storage for conversation history (required)
+	ctx := context.Background()
+	redisStore, err := storage.NewRedisStorage[ConversationHistory](ctx)
+	if err != nil {
+		log.Fatal("Redis is required for session management:", err)
+	}
+	fmt.Println("Redis storage initialized")
+
+	// Model configuration
 	config := &openai.ChatModelConfig{
 		APIKey:      apiKey,
 		BaseURL:     "https://openrouter.ai/api/v1",
@@ -56,100 +80,149 @@ func main() {
 		Temperature: &yamlConfig.NLUConfig.Temperature,
 	}
 
-	ctx := context.Background()
 	chatModel, err := openai.NewChatModel(ctx, config)
 	if err != nil {
 		fmt.Printf("Error creating model: %v\n", err)
 		return
 	}
 
-	g := compose.NewGraph[QueryInput, QueryOutput]()
+	genStateFunc := func(ctx context.Context) *SessionState {
+		return &SessionState{
+			CustomerID: "",
+			History:    ConversationHistory{Messages: []*schema.Message{}},
+		}
+	}
+	// Graph with state management
+	g := compose.NewGraph[QueryInputWithState, QueryOutputWithState](
+		compose.WithGenLocalState(genStateFunc),
+	)
+	// State Pre Handler: Load conversation from Redis and prepare context
+	statePreHandler := func(ctx context.Context, input QueryInputWithState, state *SessionState) (QueryInputWithState, error) {
+		state.CustomerID = input.CustomerID
 
-	// Create NLU template as InvokableLambda node
-	nluTemplateFunc := compose.InvokableLambda(func(ctx context.Context, input QueryInput) ([]*schema.Message, error) {
-		// Construct the input text with conversation context format
-		NLUinput := `<conversation_context>
-			UserMessage(สวัสดีจ้า)
-			AssistantMessage(ดีจ้า)
-			UserMessage(ซื้อของหน่อยจ้า)
-			AssistantMessage(ได้เลยจ้า)
-			</conversation_context>
-			<current_message_to_analyze>
-			UserMessage(` + input.Query + `)
-			</current_message_to_analyze>`
+		// Load full conversation history from Redis
+		h, err := redisStore.GetAndTouch(ctx, input.CustomerID)
+		if err != nil {
+			h = ConversationHistory{Messages: nil}
+		}
+		state.History = h
 
+		// Add current user message to full history
+		state.History.Messages = append(state.History.Messages, schema.UserMessage(input.Query))
+
+		// Build conversation context using only last 5 messages for NLU
+		recentMessages := trimTail(state.History.Messages, MaxNLUContext)
+
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("<conversation_context>\n")
+		for _, msg := range recentMessages {
+			switch msg.Role {
+			case schema.User:
+				contextBuilder.WriteString("UserMessage(" + msg.Content + ")\n")
+			case schema.Assistant:
+				contextBuilder.WriteString("AssistantMessage(" + msg.Content + ")\n")
+			}
+		}
+
+		contextBuilder.WriteString("</conversation_context>\n")
+		contextBuilder.WriteString("<current_message_to_analyze>\n")
+		contextBuilder.WriteString("UserMessage(" + input.Query + ")\n")
+		contextBuilder.WriteString("</current_message_to_analyze>")
+
+		log.Printf("Customer %s: Loaded %d messages, now %v ",
+			input.CustomerID, len(state.History.Messages), state.History.Messages)
+
+		// Return modified input with conversation context
+		return QueryInputWithState{
+			CustomerID:      input.CustomerID,
+			Query:           input.Query,
+			ConversationCtx: contextBuilder.String(),
+		}, nil
+	}
+
+	// State Post Handler: Save updated conversation back to Redis
+	statePostHandler := func(ctx context.Context, output []*schema.Message, state *SessionState) ([]*schema.Message, error) {
+		// Save updated conversation history back to Redis
+		if err := redisStore.SetSession(ctx, state.CustomerID, state.History); err != nil {
+			log.Printf("Warning: Failed to save conversation history for %s: %v", state.CustomerID, err)
+		} else {
+			log.Printf("Customer %s: Saved conversation with %d messages to Redis",
+				state.CustomerID, len(state.History.Messages))
+		}
+		return output, nil
+	}
+
+	// Build prompt for NLU processing with conversation context
+	buildPromptFunc := compose.InvokableLambda(func(ctx context.Context, input QueryInputWithState) ([]*schema.Message, error) {
 		messages := []*schema.Message{
 			schema.SystemMessage(nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)),
-			schema.UserMessage(NLUinput),
+			schema.UserMessage(input.ConversationCtx), // Pre-built conversation context
 		}
-		log.Println(messages)
+		log.Printf("Customer %s: Generated NLU Input with conversation context", input.CustomerID)
 		return messages, nil
 	})
 
-	// Add node to parse NLU output using the new parser
-	outputTransform := compose.InvokableLambda(func(ctx context.Context, input *schema.Message) (QueryOutput, error) {
-		// Create NLU processor
+	// Parse NLU response from chat model output
+	parseNLUFunc := compose.InvokableLambda(func(ctx context.Context, input *schema.Message) (QueryOutputWithState, error) {
 		processor := nlu.NewNLUProcessor()
-
-		// Parse the response content
 		nluResult, parseErr := processor.ParseResponse(input.Content)
 
-		return QueryOutput{
+		return QueryOutputWithState{
 			NLUResult:  nluResult,
 			ParseError: parseErr,
 		}, nil
 	})
 
-	g.AddLambdaNode(NodeNLUInputTransform, nluTemplateFunc)
+	// Add nodes with state handlers
+	g.AddLambdaNode(NodeNLUBuildPrompt, buildPromptFunc,
+		compose.WithStatePreHandler(statePreHandler),
+		compose.WithStatePostHandler(statePostHandler))
 	g.AddChatModelNode(NodeNLUChatModel, chatModel)
-	g.AddLambdaNode(NodeNLUOutputParser, outputTransform)
+	g.AddLambdaNode(NodeNLUParser, parseNLUFunc)
 
-	g.AddEdge(compose.START, NodeNLUInputTransform)
-	g.AddEdge(NodeNLUInputTransform, NodeNLUChatModel)
-	g.AddEdge(NodeNLUChatModel, NodeNLUOutputParser)
-	g.AddEdge(NodeNLUOutputParser, compose.END)
+	// Add edges
+	g.AddEdge(compose.START, NodeNLUBuildPrompt)
+	g.AddEdge(NodeNLUBuildPrompt, NodeNLUChatModel)
+	g.AddEdge(NodeNLUChatModel, NodeNLUParser)
+	g.AddEdge(NodeNLUParser, compose.END)
 
-	// Compile และทดสอบ
+	// Compile graph
 	runnable, err := g.Compile(ctx)
 	if err != nil {
 		fmt.Printf("Error compiling graph: %v\n", err)
 		return
 	}
 
-	input := QueryInput{
-		CustomerID: "12345",
-		Query:      "สวัสดี ของไม่มาถึงสักที ",
-	}
-	fmt.Printf("Input: %+v\n", input)
-
-	start := time.Now()
-	result, err := runnable.Invoke(ctx, input)
-	duration := time.Since(start)
-
-	if err != nil {
-		fmt.Printf("Error running graph: %v\n", err)
-		return
+	// Test with multiple inputs
+	inputs := []QueryInputWithState{
+		{CustomerID: "132", Query: "สวัสดี"},
+		{CustomerID: "132", Query: "สนใจซื้อของ"},
+		{CustomerID: "132", Query: "ราคาเท่าไหร่"},
+		{CustomerID: "132", Query: "เเพงจัง"},
+		{CustomerID: "132", Query: "ขอบคุณนะครับ"},
 	}
 
-	if result.ParseError != nil {
-		fmt.Printf("❌ Parse Error: %v\n", result.ParseError)
-	} else if result.NLUResult != nil {
+	for i, input := range inputs {
+		fmt.Printf("\n=== Processing Input %d ===\n", i+1)
+		fmt.Printf("Input: CustomerID=%s, Query=%s\n", input.CustomerID, input.Query)
 
-		fmt.Printf("\n✅ Parsed NLU Result (JSON):\n")
-		jsonBytes, err := json.MarshalIndent(result.NLUResult, "", "  ")
+		start := time.Now()
+		result, err := runnable.Invoke(ctx, input)
+		duration := time.Since(start)
+
 		if err != nil {
-			fmt.Printf("Error marshaling JSON: %v\n", err)
-			fmt.Printf("%+v\n", result.NLUResult)
-		} else {
-			fmt.Printf("%s\n", string(jsonBytes))
+			fmt.Printf("Error running graph: %v\n", err)
+			continue
 		}
-		// Display Summary Information
-		fmt.Printf("\n📊 Summary:\n")
-		fmt.Printf("  Primary Intent: %s\n", result.NLUResult.PrimaryIntent)
-		fmt.Printf("  Primary Language: %s\n", result.NLUResult.PrimaryLanguage)
-		fmt.Printf("  Importance Score: %.3f\n", result.NLUResult.ImportanceScore)
-		fmt.Printf("  Parsed at: %s\n", result.NLUResult.Timestamp.Format("2006-01-02 15:04:05"))
-	}
 
-	fmt.Printf("\n⏱️ Total time: %v\n", duration)
+		if result.ParseError != nil {
+			fmt.Printf("❌ Parse Error: %v\n", result.ParseError)
+		} else if result.NLUResult != nil {
+			fmt.Printf("✅ Primary Intent: %s, Language: %s, Score: %.3f\n",
+				result.NLUResult.PrimaryIntent, result.NLUResult.PrimaryLanguage,
+				result.NLUResult.ImportanceScore)
+		}
+
+		fmt.Printf("⏱️ Time: %v\n", duration)
+	}
 }
