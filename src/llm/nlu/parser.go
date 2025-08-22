@@ -19,10 +19,10 @@ const (
 	MaxTupleLength             = 2000
 	MaxMetadataLength          = 5000
 	MaxMetadataFields          = 50
-	
+
 	// Importance score calculation weights
-	ConfidenceWeight           = 0.6
-	PriorityWeight             = 0.4
+	ConfidenceWeight = 0.6
+	PriorityWeight   = 0.4
 )
 
 // RawTuple represents a parsed tuple with string parts
@@ -429,6 +429,11 @@ func (n *NLUProcessor) calculateDerivedFields(response *model.NLUResponse) {
 		// Simple weighted formula: 60% confidence + 40% priority
 		response.ImportanceScore = (primary.Confidence * ConfidenceWeight) + (primary.Priority * PriorityWeight)
 	}
+}
+
+func ParseNLUResponse(content string) (*model.NLUResponse, error) {
+	processor := NewNLUProcessor()
+	return processor.ParseResponse(content)
 }
 
 // calculateDerivedFields - Derived Field Calculation Function
