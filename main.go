@@ -69,7 +69,7 @@ func main() {
 		}{MaxTurns: yamlConfig.ConversationConfig.Response.MaxTurns},
 	}
 
-	conversationManager, err := conversation.NewMessagesManager(ctx, conversationConfig)
+	messagesManager, err := conversation.NewMessagesManager(ctx, conversationConfig)
 	if err != nil {
 		fmt.Printf("Error setting up conversation manager: %v\n", err)
 		return
@@ -92,9 +92,9 @@ func main() {
 	g := compose.NewGraph[QueryInput, QueryOutput]()
 
 	// ----- Nodes -----
-	buildPrompt := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (QueryInputWithContext, error) {
-		// Use simplified ConversationManager for NLU processing
-		conversationCtx, err := conversationManager.ProcessNLUMessage(ctx, input.CustomerID, input.Query)
+	buildNlUMessage := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (QueryInputWithContext, error) {
+		// Use simplified messagesManager for NLU processing
+		conversationCtx, err := messagesManager.ProcessNLUMessage(ctx, input.CustomerID, input.Query)
 		if err != nil {
 			return QueryInputWithContext{}, err
 		}
@@ -108,7 +108,7 @@ func main() {
 		}, nil
 	})
 
-	buildMessages := compose.InvokableLambda(func(ctx context.Context, input QueryInputWithContext) ([]*schema.Message, error) {
+	buildNLUContext := compose.InvokableLambda(func(ctx context.Context, input QueryInputWithContext) ([]*schema.Message, error) {
 		// Generate system prompt with injected configuration
 		systemPrompt := nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)
 
@@ -121,7 +121,7 @@ func main() {
 		}, nil
 	})
 
-	parseNLU := compose.InvokableLambda(func(ctx context.Context, resp *schema.Message) (QueryOutput, error) {
+	parseNLUOutput := compose.InvokableLambda(func(ctx context.Context, resp *schema.Message) (QueryOutput, error) {
 		// In a real implementation, we'd need to pass this through the graph context
 
 		// Parse NLU response
@@ -135,7 +135,7 @@ func main() {
 		customerID := "132" // Temporary hardcode
 
 		// Save assistant response to conversation
-		if err := conversationManager.SaveResponse(ctx, customerID, resp.Content); err != nil {
+		if err := messagesManager.SaveResponse(ctx, customerID, resp.Content); err != nil {
 			log.Printf("Warning: Failed to save assistant response: %v", err)
 		}
 
@@ -147,10 +147,10 @@ func main() {
 		}, nil
 	})
 
-	g.AddLambdaNode(NodeNLUBuildPrompt, buildPrompt)
-	g.AddLambdaNode(NodeBuildMessages, buildMessages)
+	g.AddLambdaNode(NodeNLUBuildPrompt, buildNlUMessage)
+	g.AddLambdaNode(NodeBuildMessages, buildNLUContext)
 	g.AddChatModelNode(NodeNLUChatModel, chatModel)
-	g.AddLambdaNode(NodeNLUParser, parseNLU)
+	g.AddLambdaNode(NodeNLUParser, parseNLUOutput)
 	// Add edges
 	g.AddEdge(compose.START, NodeNLUBuildPrompt)
 	g.AddEdge(NodeNLUBuildPrompt, NodeBuildMessages)
