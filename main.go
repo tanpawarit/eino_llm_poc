@@ -185,11 +185,11 @@ func main() {
 
 	// Test with multiple inputs
 	inputs := []QueryInput{
-		{CustomerID: "1321", Query: "สวัสดี"},
-		{CustomerID: "1321", Query: "สนใจซื้อของ"},
-		{CustomerID: "1321", Query: "ราคาเท่าไหร่"},
-		{CustomerID: "1321", Query: "แพงจัง"},
-		{CustomerID: "1321", Query: "ขอบคุณนะครับ"},
+		{CustomerID: "1111", Query: "สวัสดี"},
+		{CustomerID: "1111", Query: "สนใจซื้อของ"},
+		{CustomerID: "1111", Query: "ราคาเท่าไหร่"},
+		{CustomerID: "1111", Query: "แพงจัง"},
+		{CustomerID: "1111", Query: "ขอบคุณนะครับ"},
 	}
 
 	for i, input := range inputs {
