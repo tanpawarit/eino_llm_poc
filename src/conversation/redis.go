@@ -28,7 +28,7 @@ type RedisStorageAdapter struct {
 	ttl    time.Duration
 }
 
-func NewRedisStorageAdapter(ctx context.Context, ttlSeconds int) (*RedisStorageAdapter, error) {
+func NewRedisStorageAdapter(ctx context.Context, ttlMinute int) (*RedisStorageAdapter, error) {
 	// Get Redis URL from environment variable
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
@@ -51,7 +51,7 @@ func NewRedisStorageAdapter(ctx context.Context, ttlSeconds int) (*RedisStorageA
 
 	return &RedisStorageAdapter{
 		client: client,
-		ttl:    time.Duration(ttlSeconds) * time.Second,
+		ttl:    time.Duration(ttlMinute) * time.Minute,
 	}, nil
 }
 

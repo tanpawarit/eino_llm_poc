@@ -10,7 +10,7 @@ nlu:
 
 # Conversation management configuration  
 conversation:
-  ttl: 60
+  ttl: 15 # in sec
   nlu:
     max_turns: 5 # Last N messages for NLU context 
   response:

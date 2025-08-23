@@ -23,23 +23,27 @@ type QueryInput struct {
 	Query      string `json:"query"`
 }
 
-type QueryInputWithContext struct {
-	CustomerID      string `json:"customer_id"`
-	Query           string `json:"query"`
-	ConversationCtx string `json:"conversation_ctx"`
+type State struct {
+	History    []*schema.Message
+	CustomerID string
 }
 
 type QueryOutput struct {
-	CustomerID string            `json:"customer_id"`
-	Result     model.NLUResponse `json:"result"`
+	Result model.NLUResponse `json:"result"`
 }
 
 const (
-	NodeNLUBuildPrompt = "BuildPrompt"
-	NodeBuildMessages  = "BuildMessages"
+	NodeInputConverter = "InputConverter"
 	NodeNLUChatModel   = "NLUChatModel"
-	NodeNLUParser      = "ParseNLU"
+	NodeParser         = "Parser"
 )
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -76,7 +80,7 @@ func main() {
 	}
 
 	// Setup OpenAI model
-	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
+	chatModelNLU, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		APIKey:      apiKey,
 		BaseURL:     "https://openrouter.ai/api/v1",
 		Model:       yamlConfig.NLUConfig.Model,
@@ -88,75 +92,94 @@ func main() {
 		return
 	}
 
-	// Create graph without state management
-	g := compose.NewGraph[QueryInput, QueryOutput]()
+	g := compose.NewGraph[QueryInput, QueryOutput](
+		compose.WithGenLocalState(func(ctx context.Context) *State {
+			return &State{
+				History: []*schema.Message{},
+			}
+		}),
+	)
 
-	// ----- Nodes -----
-	buildNlUMessage := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (QueryInputWithContext, error) {
-		// Use simplified messagesManager for NLU processing
+	inputConverterNLU := compose.InvokableLambda(func(ctx context.Context, input QueryInput) ([]*schema.Message, error) {
+		log.Printf("Customer %s: Processing query - %s", input.CustomerID, input.Query)
 		conversationCtx, err := messagesManager.ProcessNLUMessage(ctx, input.CustomerID, input.Query)
 		if err != nil {
-			return QueryInputWithContext{}, err
+			log.Printf("Customer %s: Error getting conversation context: %v", input.CustomerID, err)
+			return nil, err
 		}
 
-		log.Printf("Customer %s: Generated NLU Input with conversation context", input.CustomerID)
+		log.Printf("Customer %s: Retrieved conversation context from Redis", input.CustomerID)
 
-		return QueryInputWithContext{
-			CustomerID:      input.CustomerID,
-			Query:           input.Query,
-			ConversationCtx: conversationCtx,
-		}, nil
-	})
-
-	buildNLUContext := compose.InvokableLambda(func(ctx context.Context, input QueryInputWithContext) ([]*schema.Message, error) {
-		// Generate system prompt with injected configuration
+		// Generate system prompt
 		systemPrompt := nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)
 
-		// Create user prompt with conversation context
-		userPrompt := input.ConversationCtx
-
-		return []*schema.Message{
+		// Create messages with customerID in Extra
+		messages := []*schema.Message{
 			schema.SystemMessage(systemPrompt),
-			schema.UserMessage(userPrompt),
-		}, nil
+			schema.UserMessage(conversationCtx),
+		}
+
+		for _, msg := range messages {
+			if msg.Extra == nil {
+				msg.Extra = make(map[string]interface{})
+			}
+			msg.Extra["customerID"] = input.CustomerID
+		}
+		log.Printf("Customer %s: inputConverterNode Messages: %v", input.CustomerID, messages)
+		return messages, nil
 	})
 
-	parseNLUOutput := compose.InvokableLambda(func(ctx context.Context, resp *schema.Message) (QueryOutput, error) {
-		// In a real implementation, we'd need to pass this through the graph context
+	preHandlerNLU := func(ctx context.Context, in []*schema.Message, state *State) ([]*schema.Message, error) {
+		// Extract customerID from first message and store in state
+		if len(in) > 0 && len(state.CustomerID) == 0 {
+			if cid, ok := in[0].Extra["customerID"].(string); ok {
+				state.CustomerID = cid
+			}
+		}
+		state.History = append(state.History, in...)
+		return state.History, nil
+	}
 
-		// Parse NLU response
+	postHandlerNLU := func(ctx context.Context, out *schema.Message, state *State) (*schema.Message, error) {
+		customerID := state.CustomerID
+		log.Printf("Customer %s: Model response - %s", customerID,
+			out.Content[:(len(out.Content))])
+
+		// Save response to Redis
+		if err := messagesManager.SaveResponse(ctx, customerID, out.Content); err != nil {
+			log.Printf("Warning: Failed to save response to Redis for customer %s: %v", customerID, err)
+		} else {
+			log.Printf("Customer %s: Successfully saved response to Redis", customerID)
+		}
+		// Update history
+		state.History = append(state.History, out)
+		return out, nil
+	}
+
+	parserNLU := compose.InvokableLambda(func(ctx context.Context, resp *schema.Message) (QueryOutput, error) {
 		result, err := nlu.ParseNLUResponse(resp.Content)
 		if err != nil {
-			log.Printf("Error parsing NLU response: %v", err)
 			return QueryOutput{}, err
 		}
-
-		// TODO: Fix this to get actual customerID from graph context
-		customerID := "132" // Temporary hardcode
-
-		// Save assistant response to conversation
-		if err := messagesManager.SaveResponse(ctx, customerID, resp.Content); err != nil {
-			log.Printf("Warning: Failed to save assistant response: %v", err)
-		}
-
-		log.Printf("Customer %s: Saved conversation to Redis", customerID)
-
+		log.Printf("Customer %s: Successfully parsed NLU response", resp.Extra["customerID"])
 		return QueryOutput{
-			CustomerID: customerID,
-			Result:     *result,
+			Result: *result,
 		}, nil
 	})
 
-	g.AddLambdaNode(NodeNLUBuildPrompt, buildNlUMessage)
-	g.AddLambdaNode(NodeBuildMessages, buildNLUContext)
-	g.AddChatModelNode(NodeNLUChatModel, chatModel)
-	g.AddLambdaNode(NodeNLUParser, parseNLUOutput)
-	// Add edges
-	g.AddEdge(compose.START, NodeNLUBuildPrompt)
-	g.AddEdge(NodeNLUBuildPrompt, NodeBuildMessages)
-	g.AddEdge(NodeBuildMessages, NodeNLUChatModel)
-	g.AddEdge(NodeNLUChatModel, NodeNLUParser)
-	g.AddEdge(NodeNLUParser, compose.END)
+	// Add nodes to graph
+	g.AddLambdaNode(NodeInputConverter, inputConverterNLU)
+	g.AddChatModelNode(NodeNLUChatModel, chatModelNLU,
+		compose.WithStatePreHandler(preHandlerNLU),
+		compose.WithStatePostHandler(postHandlerNLU),
+	)
+	g.AddLambdaNode(NodeParser, parserNLU)
+
+	// Wire the nodes
+	g.AddEdge(compose.START, NodeInputConverter)
+	g.AddEdge(NodeInputConverter, NodeNLUChatModel)
+	g.AddEdge(NodeNLUChatModel, NodeParser)
+	g.AddEdge(NodeParser, compose.END)
 
 	// Compile graph
 	runnable, err := g.Compile(ctx)
@@ -167,11 +190,11 @@ func main() {
 
 	// Test with multiple inputs
 	inputs := []QueryInput{
-		{CustomerID: "132", Query: "สวัสดี"},
-		{CustomerID: "132", Query: "สนใจซื้อของ"},
-		{CustomerID: "132", Query: "ราคาเท่าไหร่"},
-		{CustomerID: "132", Query: "แพงจัง"},
-		{CustomerID: "132", Query: "ขอบคุณนะครับ"},
+		{CustomerID: "1321", Query: "สวัสดี"},
+		{CustomerID: "1321", Query: "สนใจซื้อของ"},
+		{CustomerID: "1321", Query: "ราคาเท่าไหร่"},
+		{CustomerID: "1321", Query: "แพงจัง"},
+		{CustomerID: "1321", Query: "ขอบคุณนะครับ"},
 	}
 
 	for i, input := range inputs {
