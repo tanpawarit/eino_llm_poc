@@ -38,13 +38,6 @@ const (
 	NodeParser         = "Parser"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found")
@@ -161,7 +154,6 @@ func main() {
 		if err != nil {
 			return QueryOutput{}, err
 		}
-		log.Printf("Customer %s: Successfully parsed NLU response", resp.Extra["customerID"])
 		return QueryOutput{
 			Result: *result,
 		}, nil
