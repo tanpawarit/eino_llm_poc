@@ -154,6 +154,9 @@ func main() {
 		if err != nil {
 			return QueryOutput{}, err
 		}
+		if result == nil {
+			return QueryOutput{}, fmt.Errorf("received nil result from ParseNLUResponse")
+		}
 		return QueryOutput{
 			Result: *result,
 		}, nil

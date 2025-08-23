@@ -81,7 +81,12 @@ func (cm *MessagesManager) SaveResponse(ctx context.Context, customerID string, 
 // ====================== Helper function ======================
 func trimTail(messages []*schema.Message, maxTurns int) []*schema.Message {
 	if len(messages) <= maxTurns {
-		return messages
+		result := make([]*schema.Message, len(messages))
+		copy(result, messages)
+		return result
 	}
-	return messages[len(messages)-maxTurns:]
+	source := messages[len(messages)-maxTurns:]
+	result := make([]*schema.Message, len(source))
+	copy(result, source)
+	return result
 }
