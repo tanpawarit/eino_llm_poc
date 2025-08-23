@@ -2,93 +2,46 @@ package conversation
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
 	"strings"
-	"time"
+
+	"eino_llm_poc/src/model"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/redis/go-redis/v9"
 )
 
-// ConversationHistory holds conversation messages
-type ConversationHistory struct {
-	Messages []*schema.Message `json:"messages"`
+type MessagesManager struct {
+	storage      StorageAdapter
+	nluMaxTurns  int
+	respMaxTurns int
 }
 
-type ConversationManager struct {
-	redis  *redis.Client
-	config ConversationConfig
-}
-
-type ConversationConfig struct {
-	TTL time.Duration
-	NLU struct{ MaxTurns int }
-}
-
-func NewConversationManager(ctx context.Context, config ConversationConfig) (*ConversationManager, error) {
-	// Get Redis URL from environment variable
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL environment variable is required")
-	}
-
-	opts, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse REDIS_URL: %w", err)
-	}
-
-	client := redis.NewClient(opts)
-
-	// Test connection
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
-	}
-
-	return &ConversationManager{
-		redis:  client,
-		config: config,
-	}, nil
-}
-
-// ProcessNLUMessage
-func (m *ConversationManager) ProcessNLUMessage(ctx context.Context, customerID, query string) (string, error) {
-	// Use built-in NLU strategy with config
-	strategy := &NLUStrategy{maxTurns: m.config.NLU.MaxTurns}
-	return m.processMessage(ctx, customerID, query, strategy)
-}
-
-// SaveResponse saves assistant response to conversation
-func (m *ConversationManager) SaveResponse(ctx context.Context, customerID, response string) error {
-	return m.addMessage(ctx, customerID, schema.AssistantMessage(response, nil))
-}
-
-// GetHistory returns conversation history
-func (m *ConversationManager) GetHistory(ctx context.Context, customerID string) ([]*schema.Message, error) {
-	history, err := m.loadHistory(ctx, customerID)
+func NewMessagesManager(ctx context.Context, config model.ConversationConfig) (*MessagesManager, error) {
+	storage, err := NewRedisStorageAdapter(ctx, config.TTL)
 	if err != nil {
 		return nil, err
 	}
-	return history.Messages, nil
+	return &MessagesManager{
+		storage:      storage,
+		nluMaxTurns:  config.NLU.MaxTurns,
+		respMaxTurns: config.Response.MaxTurns,
+	}, nil
 }
 
-// ====================== Private Methods ======================
-
-func (m *ConversationManager) processMessage(ctx context.Context, customerID, query string, strategy ContextStrategy) (string, error) {
+// =========== Function for NLU ===========
+func (cm *MessagesManager) ProcessNLUMessage(ctx context.Context, customerID string, query string) (string, error) {
 	// 1. Save user message
 	userMsg := schema.UserMessage(query)
-	if err := m.addMessage(ctx, customerID, userMsg); err != nil {
+	if err := cm.storage.AddMessage(ctx, customerID, userMsg); err != nil {
 		return "", err
 	}
 
 	// 2. Load history and build context
-	history, err := m.loadHistory(ctx, customerID)
+	history, err := cm.storage.LoadHistory(ctx, customerID)
 	if err != nil {
 		return "", err
 	}
 
-	conversationContext := strategy.BuildContext(history.Messages)
+	conversationContext := cm.buildNLUContext(history.Messages)
 
 	// 3. Build complete context with current message
 	var fullContext strings.Builder
@@ -100,64 +53,8 @@ func (m *ConversationManager) processMessage(ctx context.Context, customerID, qu
 	return fullContext.String(), nil
 }
 
-func (m *ConversationManager) addMessage(ctx context.Context, customerID string, message *schema.Message) error {
-	history, err := m.loadHistory(ctx, customerID)
-	if err != nil {
-		return err
-	}
-
-	history.Messages = append(history.Messages, message)
-	return m.saveHistory(ctx, customerID, history)
-}
-
-func (m *ConversationManager) loadHistory(ctx context.Context, customerID string) (*ConversationHistory, error) {
-	key := "conversation:" + customerID
-	data, err := m.redis.Get(ctx, key).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return &ConversationHistory{Messages: []*schema.Message{}}, nil
-		}
-		return nil, err
-	}
-
-	var history ConversationHistory
-	if err := json.Unmarshal([]byte(data), &history); err != nil {
-		return nil, err
-	}
-
-	// Refresh TTL
-	m.redis.Expire(ctx, key, m.config.TTL)
-	return &history, nil
-}
-
-func (m *ConversationManager) saveHistory(ctx context.Context, customerID string, history *ConversationHistory) error {
-	key := "conversation:" + customerID
-	data, err := json.Marshal(history)
-	if err != nil {
-		return err
-	}
-
-	return m.redis.Set(ctx, key, data, m.config.TTL).Err()
-}
-
-// ====================== Built-in Strategies ======================
-// ContextStrategy interface for different context building strategies
-type ContextStrategy interface {
-	BuildContext(messages []*schema.Message) string
-	GetMaxTurns() int
-}
-
-// NLUStrategy - Built-in NLU strategy
-type NLUStrategy struct {
-	maxTurns int
-}
-
-func (s *NLUStrategy) GetMaxTurns() int {
-	return s.maxTurns
-}
-
-func (s *NLUStrategy) BuildContext(messages []*schema.Message) string {
-	recentMessages := trimTail(messages, s.maxTurns)
+func (cm *MessagesManager) buildNLUContext(messages []*schema.Message) string {
+	recentMessages := trimTail(messages, cm.nluMaxTurns)
 
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("<conversation_context>\n")
@@ -173,6 +70,12 @@ func (s *NLUStrategy) BuildContext(messages []*schema.Message) string {
 
 	contextBuilder.WriteString("</conversation_context>")
 	return contextBuilder.String()
+}
+
+// =========== Function for Response ===========
+func (cm *MessagesManager) SaveResponse(ctx context.Context, customerID string, content string) error {
+	assistantMsg := schema.AssistantMessage(content, nil)
+	return cm.storage.AddMessage(ctx, customerID, assistantMsg)
 }
 
 // ====================== Helper function ======================

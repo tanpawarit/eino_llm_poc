@@ -13,3 +13,5 @@ conversation:
   ttl: 60
   nlu:
     max_turns: 5 # Last N messages for NLU context 
+  response:
+    max_turns: 10 # Last N messages for Response context 

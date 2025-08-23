@@ -4,6 +4,16 @@ import "time"
 
 // ----------------------------------------------------
 // ================ Config ================
+type ConversationConfig struct {
+	TTL int `yaml:"ttl"`
+	NLU struct {
+		MaxTurns int `yaml:"max_turns"`
+	} `yaml:"nlu"`
+	Response struct {
+		MaxTurns int `yaml:"max_turns"`
+	} `yaml:"response"`
+}
+
 // NLUConfig holds configuration for the NLU system
 type NLUConfig struct {
 	Model               string  `yaml:"model"`
@@ -16,17 +26,6 @@ type NLUConfig struct {
 	AdditionalEntity    string  `yaml:"additional_entity"`
 }
 
-// ConversationConfig holds conversation management configuration
-type ConversationConfig struct {
-	TTL int `yaml:"ttl"`
-	NLU struct {
-		MaxTurns int `yaml:"max_turns"`
-	} `yaml:"nlu"`
-}
-
-// ----------------------------------------------------
-
-// ----------------------------------------------------
 // ================ Response ================
 // Intent represents a detected user intent
 type Intent struct {

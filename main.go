@@ -59,12 +59,17 @@ func main() {
 	// Setup conversation manager with config
 	ttlMinutes := yamlConfig.ConversationConfig.TTL
 
-	conversationConfig := conversation.ConversationConfig{
-		TTL: time.Duration(ttlMinutes) * time.Minute,
-		NLU: struct{ MaxTurns int }{MaxTurns: yamlConfig.ConversationConfig.NLU.MaxTurns},
+	conversationConfig := model.ConversationConfig{
+		TTL: ttlMinutes,
+		NLU: struct {
+			MaxTurns int `yaml:"max_turns"`
+		}{MaxTurns: yamlConfig.ConversationConfig.NLU.MaxTurns},
+		Response: struct {
+			MaxTurns int `yaml:"max_turns"`
+		}{MaxTurns: yamlConfig.ConversationConfig.Response.MaxTurns},
 	}
 
-	conversationManager, err := conversation.NewConversationManager(ctx, conversationConfig)
+	conversationManager, err := conversation.NewMessagesManager(ctx, conversationConfig)
 	if err != nil {
 		fmt.Printf("Error setting up conversation manager: %v\n", err)
 		return
