@@ -16,16 +16,15 @@ type NLUConfig struct {
 	AdditionalEntity    string  `yaml:"additional_entity"`
 }
 
-// ----------------------------------------------------
-// ================ Request ================
-type NLURequest struct {
-	Text               string   `json:"text"`
-	CustomerID         string   `json:"customer_id,omitempty"`
-	DefaultIntents     []string `json:"default_intents,omitempty"`
-	AdditionalIntents  []string `json:"additional_intents,omitempty"`
-	DefaultEntities    []string `json:"default_entities,omitempty"`
-	AdditionalEntities []string `json:"additional_entities,omitempty"`
+// ConversationConfig holds conversation management configuration
+type ConversationConfig struct {
+	TTL int `yaml:"ttl"`
+	NLU struct {
+		MaxTurns int `yaml:"max_turns"`
+	} `yaml:"nlu"`
 }
+
+// ----------------------------------------------------
 
 // ----------------------------------------------------
 // ================ Response ================

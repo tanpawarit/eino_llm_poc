@@ -9,7 +9,8 @@ import (
 )
 
 type YAMLConfig struct {
-	NLUConfig model.NLUConfig `yaml:"nlu"`
+	NLUConfig          model.NLUConfig          `yaml:"nlu"`
+	ConversationConfig model.ConversationConfig `yaml:"conversation"`
 }
 
 func LoadConfig(filepath string) (*YAMLConfig, error) {

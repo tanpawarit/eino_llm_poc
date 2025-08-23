@@ -56,15 +56,19 @@ func main() {
 		return
 	}
 
-	// Setup conversation repository with Redis
-	repo, err := conversation.NewRedisRepository(ctx, 24*time.Hour)
+	// Setup conversation manager with config
+	ttlMinutes := yamlConfig.ConversationConfig.TTL
+
+	conversationConfig := conversation.ConversationConfig{
+		TTL: time.Duration(ttlMinutes) * time.Minute,
+		NLU: struct{ MaxTurns int }{MaxTurns: yamlConfig.ConversationConfig.NLU.MaxTurns},
+	}
+
+	conversationManager, err := conversation.NewConversationManager(ctx, conversationConfig)
 	if err != nil {
-		fmt.Printf("Error setting up Redis repository: %v\n", err)
+		fmt.Printf("Error setting up conversation manager: %v\n", err)
 		return
 	}
-	// Setup conversation service with NLU strategy
-	conversationService := conversation.NewService(repo)
-	nluStrategy := conversation.NewNLUContextStrategy()
 
 	// Setup OpenAI model
 	chatModel, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
@@ -84,7 +88,8 @@ func main() {
 
 	// ----- Nodes -----
 	buildPrompt := compose.InvokableLambda(func(ctx context.Context, input QueryInput) (QueryInputWithContext, error) {
-		conversationCtx, err := conversationService.ProcessMessage(ctx, input.CustomerID, input.Query, nluStrategy)
+		// Use simplified ConversationManager for NLU processing
+		conversationCtx, err := conversationManager.ProcessNLUMessage(ctx, input.CustomerID, input.Query)
 		if err != nil {
 			return QueryInputWithContext{}, err
 		}
@@ -125,7 +130,7 @@ func main() {
 		customerID := "132" // Temporary hardcode
 
 		// Save assistant response to conversation
-		if err := conversationService.SaveResponse(ctx, customerID, resp.Content); err != nil {
+		if err := conversationManager.SaveResponse(ctx, customerID, resp.Content); err != nil {
 			log.Printf("Warning: Failed to save assistant response: %v", err)
 		}
 

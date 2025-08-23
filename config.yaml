@@ -7,3 +7,9 @@ nlu:
   additional_intent: "complaint:0.5, cancel_order:0.4, ask_price:0.6, compare_product:0.5, delivery_issue:0.7"
   default_entity: "product, quantity, brand, price"
   additional_entity: "color, model, spec, budget, warranty, delivery"
+
+# Conversation management configuration  
+conversation:
+  ttl: 60
+  nlu:
+    max_turns: 5 # Last N messages for NLU context 
