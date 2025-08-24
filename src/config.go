@@ -3,26 +3,20 @@ package src
 import (
 	"eino_llm_poc/src/model"
 	"fmt"
-	"os"
 
-	"gopkg.in/yaml.v2"
+	"github.com/kelseyhightower/envconfig"
 )
 
-type YAMLConfig struct {
-	NLUConfig          model.NLUConfig          `yaml:"nlu"`
-	ConversationConfig model.ConversationConfig `yaml:"conversation"`
+type Config struct {
+	NLUConfig          model.NLUConfig          `envconfig:""`
+	ConversationConfig model.ConversationConfig `envconfig:""`
 }
 
-func LoadConfig(filepath string) (*YAMLConfig, error) {
-	data, err := os.ReadFile(filepath)
+func LoadConfig() (*Config, error) {
+	var config Config
+	err := envconfig.Process("", &config)
 	if err != nil {
-		return nil, fmt.Errorf("error reading config file: %v", err)
-	}
-
-	var config YAMLConfig
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing YAML: %v", err)
+		return nil, fmt.Errorf("error processing environment configuration: %v", err)
 	}
 
 	return &config, nil

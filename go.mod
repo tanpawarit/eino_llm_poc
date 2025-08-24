@@ -37,6 +37,7 @@ require (
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/meguminnnnnnnnn/go-openai v0.0.0-20250723112853-3bce976e5ccc // indirect

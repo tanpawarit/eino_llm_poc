@@ -31,10 +31,13 @@ OPENROUTER_API_KEY=dummy go run examples/<path>/main.go
 ```
 
 ### Environment Setup
-1. Copy `.env.example` to `.env` and configure:
-   - `OPENROUTER_API_KEY` - Your OpenRouter API key
+1. Copy `.env.example` to `.env` and configure all variables:
+   - `OPENROUTER_API_KEY` - Your OpenRouter API key (required)
    - `REDIS_URL` - Redis connection string (optional for some examples)
-2. Configure `config.yaml` with NLU settings (model, temperature, etc.)
+   - NLU Configuration variables (model, temperature, thresholds, intents/entities)
+   - Conversation management variables (TTL, max turns)
+
+All configuration is now handled via environment variables using the envconfig library. See `.env.example` for the complete list of available configuration options.
 
 ## Architecture Overview
 
@@ -54,9 +57,10 @@ This is an **NLU (Natural Language Understanding) processing system** built on C
 - Structured tuple-based output format with configurable delimiters (`##`, `<||>`, `<|COMPLETE|>`)
 
 **Configuration System:**
-- YAML-based configuration (`config.yaml`) loaded via `src/config.go`
-- Runtime template injection for intents/entities lists
-- Environment variable support via godotenv
+- Environment variable-based configuration using envconfig library
+- Runtime template injection for intents/entities lists 
+- Default values provided for all configuration options
+- Loaded via `src/config.go` with `src.LoadConfig()`
 
 **Model Integration:**
 - CloudWego Eino framework with OpenAI-compatible models via OpenRouter
@@ -108,8 +112,8 @@ OPENROUTER_API_KEY=dummy go run examples/<category>/<example>/main.go
 ## Development Notes
 
 ### NLU System Specifics
-- Supports configurable intent/entity lists via YAML configuration
-- Importance scoring system with threshold-based filtering
+- Supports configurable intent/entity lists via environment variables
+- Importance scoring system with threshold-based filtering  
 - Multi-language detection with primary language identification
 - Structured metadata extraction with validation limits
 
@@ -125,6 +129,7 @@ OPENROUTER_API_KEY=dummy go run examples/<category>/<example>/main.go
 - Examples demonstrate various usage patterns and complexity levels
 
 ### Configuration Management
-- YAML-based NLU configuration with runtime template injection
-- Environment variable support for API keys and external services
-- Separate configuration files for complex examples (deer-go system)
+- Environment variable-based configuration using kelseyhightower/envconfig
+- Runtime template injection for intents/entities from environment variables
+- Default values ensure system works without explicit configuration
+- Comprehensive configuration via .env files with godotenv support

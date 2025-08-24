@@ -36,25 +36,25 @@ func main() {
 	}
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	baseURL := os.Getenv("OPENROUTER_BASE_URL")
-	yamlConfig, err := src.LoadConfig("config.yaml")
+	config, err := src.LoadConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("env Config: %+v\n", apiKey)
 	fmt.Printf("env Config: %+v\n", baseURL)
-	fmt.Printf("NLU Config: %+v\n", yamlConfig.NLUConfig)
+	fmt.Printf("NLU Config: %+v\n", config.NLUConfig)
 
 	// สร้าง model configuration with NLU config injection
-	config := &openai.ChatModelConfig{
+	modelConfig := &openai.ChatModelConfig{
 		APIKey:      apiKey,
 		BaseURL:     "https://openrouter.ai/api/v1",
-		Model:       yamlConfig.NLUConfig.Model,
-		MaxTokens:   &yamlConfig.NLUConfig.MaxTokens,
-		Temperature: &yamlConfig.NLUConfig.Temperature,
+		Model:       config.NLUConfig.Model,
+		MaxTokens:   &config.NLUConfig.MaxTokens,
+		Temperature: &config.NLUConfig.Temperature,
 	}
 
 	ctx := context.Background()
-	chatModel, err := openai.NewChatModel(ctx, config)
+	chatModel, err := openai.NewChatModel(ctx, modelConfig)
 	if err != nil {
 		fmt.Printf("Error creating model: %v\n", err)
 		return
@@ -76,7 +76,7 @@ func main() {
 			</current_message_to_analyze>`
 
 		messages := []*schema.Message{
-			schema.SystemMessage(nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)),
+			schema.SystemMessage(nlu.GetSystemTemplateProcessed(&config.NLUConfig)),
 			schema.UserMessage(NLUinput),
 		}
 		log.Println(messages)

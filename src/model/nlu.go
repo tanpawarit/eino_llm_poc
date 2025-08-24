@@ -5,25 +5,25 @@ import "time"
 // ----------------------------------------------------
 // ================ Config ================
 type ConversationConfig struct {
-	TTL int `yaml:"ttl"`
+	TTL int `envconfig:"CONVERSATION_TTL" default:"15"`
 	NLU struct {
-		MaxTurns int `yaml:"max_turns"`
-	} `yaml:"nlu"`
+		MaxTurns int `envconfig:"CONVERSATION_NLU_MAX_TURNS" default:"5"`
+	}
 	Response struct {
-		MaxTurns int `yaml:"max_turns"`
-	} `yaml:"response"`
+		MaxTurns int `envconfig:"CONVERSATION_RESPONSE_MAX_TURNS" default:"10"`
+	}
 }
 
 // NLUConfig holds configuration for the NLU system
 type NLUConfig struct {
-	Model               string  `yaml:"model"`
-	MaxTokens           int     `yaml:"max_tokens"`
-	Temperature         float32 `yaml:"temperature"`
-	ImportanceThreshold float64 `yaml:"importance_threshold"`
-	DefaultIntent       string  `yaml:"default_intent"`
-	AdditionalIntent    string  `yaml:"additional_intent"`
-	DefaultEntity       string  `yaml:"default_entity"`
-	AdditionalEntity    string  `yaml:"additional_entity"`
+	Model               string  `envconfig:"NLU_MODEL" default:"openai/gpt-3.5-turbo"`
+	MaxTokens           int     `envconfig:"NLU_MAX_TOKENS" default:"2000"`
+	Temperature         float32 `envconfig:"NLU_TEMPERATURE" default:"0.1"`
+	ImportanceThreshold float64 `envconfig:"NLU_IMPORTANCE_THRESHOLD" default:"0.6"`
+	DefaultIntent       string  `envconfig:"NLU_DEFAULT_INTENT" default:"greet:0.1, purchase_intent:0.8, inquiry_intent:0.7, support_intent:0.6, complain_intent:0.6"`
+	AdditionalIntent    string  `envconfig:"NLU_ADDITIONAL_INTENT" default:"complaint:0.5, cancel_order:0.4, ask_price:0.6, compare_product:0.5, delivery_issue:0.7"`
+	DefaultEntity       string  `envconfig:"NLU_DEFAULT_ENTITY" default:"product, quantity, brand, price"`
+	AdditionalEntity    string  `envconfig:"NLU_ADDITIONAL_ENTITY" default:"color, model, spec, budget, warranty, delivery"`
 }
 
 // ================ Response ================

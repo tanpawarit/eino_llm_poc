@@ -46,25 +46,15 @@ func main() {
 	ctx := context.Background()
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 
-	// Load configuration
-	yamlConfig, err := src.LoadConfig("config.yaml")
+	// Load configuration from environment variables
+	config, err := src.LoadConfig()
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
 		return
 	}
 
 	// Setup conversation manager with config
-	ttlMinutes := yamlConfig.ConversationConfig.TTL
-
-	conversationConfig := model.ConversationConfig{
-		TTL: ttlMinutes,
-		NLU: struct {
-			MaxTurns int `yaml:"max_turns"`
-		}{MaxTurns: yamlConfig.ConversationConfig.NLU.MaxTurns},
-		Response: struct {
-			MaxTurns int `yaml:"max_turns"`
-		}{MaxTurns: yamlConfig.ConversationConfig.Response.MaxTurns},
-	}
+	conversationConfig := config.ConversationConfig
 
 	messagesManager, err := conversation.NewMessagesManager(ctx, conversationConfig)
 	if err != nil {
@@ -76,9 +66,9 @@ func main() {
 	chatModelNLU, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 		APIKey:      apiKey,
 		BaseURL:     "https://openrouter.ai/api/v1",
-		Model:       yamlConfig.NLUConfig.Model,
-		Temperature: &yamlConfig.NLUConfig.Temperature,
-		MaxTokens:   &yamlConfig.NLUConfig.MaxTokens,
+		Model:       config.NLUConfig.Model,
+		Temperature: &config.NLUConfig.Temperature,
+		MaxTokens:   &config.NLUConfig.MaxTokens,
 	})
 	if err != nil {
 		fmt.Printf("Error creating model: %v\n", err)
@@ -104,7 +94,7 @@ func main() {
 		log.Printf("Customer %s: Retrieved conversation context from Redis", input.CustomerID)
 
 		// Generate system prompt
-		systemPrompt := nlu.GetSystemTemplateProcessed(&yamlConfig.NLUConfig)
+		systemPrompt := nlu.GetSystemTemplateProcessed(&config.NLUConfig)
 
 		// Create messages with customerID in Extra
 		messages := []*schema.Message{

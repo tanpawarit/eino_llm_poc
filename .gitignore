@@ -11,6 +11,7 @@
 *.dylib
 
 /examples
+/evaluation
 implement_plan.txt
 # Test binary, built with `go test -c`
 *.test
