@@ -49,13 +49,13 @@ func main() {
 	// Load configuration from environment variables
 	config, err := src.LoadConfig()
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
+		logger.Fatal().Err(err).Msg("Error loading config")
 		return
 	}
 
 	// Initialize logger with configuration
 	if err := logger.InitLogger(config.LogConfig); err != nil {
-		fmt.Printf("Error initializing logger: %v\n", err)
+		logger.Fatal().Err(err).Msg("Error initializing logger")
 		return
 	}
 
