@@ -4,6 +4,15 @@ import "time"
 
 // ----------------------------------------------------
 // ================ Config ================
+// LogConfig holds configuration for zerolog
+type LogConfig struct {
+	Level      string `envconfig:"LOG_LEVEL" default:"info"`          // debug, info, warn, error, fatal, panic
+	Format     string `envconfig:"LOG_FORMAT" default:"json"`         // json, console
+	TimeFormat string `envconfig:"LOG_TIME_FORMAT" default:"rfc3339"` // rfc3339, unix, iso8601
+	Output     string `envconfig:"LOG_OUTPUT" default:"stdout"`       // stdout, stderr, file
+	FilePath   string `envconfig:"LOG_FILE_PATH" default:"logs/app.log"`
+}
+
 type ConversationConfig struct {
 	TTL int `envconfig:"CONVERSATION_TTL" default:"15"`
 	NLU struct {

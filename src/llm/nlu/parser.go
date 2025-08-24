@@ -1,10 +1,10 @@
 package nlu
 
 import (
+	"eino_llm_poc/src/logger"
 	"eino_llm_poc/src/model"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -336,7 +336,7 @@ func (n *NLUProcessor) ParseResponse(content string) (*model.NLUResponse, error)
 		}
 
 		if err := n.parseRecord(trimmedRecord, response); err != nil {
-			log.Printf("Warning: Failed to parse tuple: %s, error: %v", trimmedRecord, err)
+			logger.Warn().Err(err).Str("tuple", trimmedRecord).Msg("Failed to parse tuple")
 			continue
 		}
 	}

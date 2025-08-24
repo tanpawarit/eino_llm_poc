@@ -4,8 +4,8 @@ import (
 	"context"
 	"eino_llm_poc/src"
 	"eino_llm_poc/src/llm/nlu"
+	"eino_llm_poc/src/logger"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
@@ -32,17 +32,28 @@ const (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+		// Will use default values if .env not found
 	}
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	baseURL := os.Getenv("OPENROUTER_BASE_URL")
 	config, err := src.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error loading config: %v\n", err)
+		return
 	}
-	fmt.Printf("env Config: %+v\n", apiKey)
-	fmt.Printf("env Config: %+v\n", baseURL)
-	fmt.Printf("NLU Config: %+v\n", config.NLUConfig)
+
+	// Initialize logger with configuration
+	if err := logger.InitLogger(config.LogConfig); err != nil {
+		fmt.Printf("Error initializing logger: %v\n", err)
+		return
+	}
+	logger.Debug().Str("api_key_set", func() string {
+		if apiKey != "" {
+			return "yes"
+		}
+		return "no"
+	}()).Str("base_url", baseURL).Msg("Environment configuration loaded")
+	logger.Debug().Interface("nlu_config", config.NLUConfig).Msg("NLU configuration loaded")
 
 	// สร้าง model configuration with NLU config injection
 	modelConfig := &openai.ChatModelConfig{
@@ -56,7 +67,7 @@ func main() {
 	ctx := context.Background()
 	chatModel, err := openai.NewChatModel(ctx, modelConfig)
 	if err != nil {
-		fmt.Printf("Error creating model: %v\n", err)
+		logger.Error().Err(err).Msg("Error creating model")
 		return
 	}
 
@@ -79,7 +90,7 @@ func main() {
 			schema.SystemMessage(nlu.GetSystemTemplateProcessed(&config.NLUConfig)),
 			schema.UserMessage(NLUinput),
 		}
-		log.Println(messages)
+		logger.Debug().Int("message_count", len(messages)).Msg("Generated NLU template messages")
 		return messages, nil
 	})
 
@@ -99,10 +110,10 @@ func main() {
 	g.AddEdge(NodeNLUChatModel, NodeNLUOutputParser)
 	g.AddEdge(NodeNLUOutputParser, compose.END)
 
-	// Compile และทดสอบ
+	// Compile graph
 	runnable, err := g.Compile(ctx)
 	if err != nil {
-		fmt.Printf("Error compiling graph: %v\n", err)
+		logger.Error().Err(err).Msg("Error compiling graph")
 		return
 	}
 
@@ -110,17 +121,18 @@ func main() {
 		CustomerID: "12345",
 		Query:      "สวัสดีครับ อยากซื้อรองเท้า",
 	}
-	fmt.Printf("Input: %+v\n", input)
+	logger.Info().Str("customer_id", input.CustomerID).Str("query", input.Query).Msg("Starting test processing")
 
 	start := time.Now()
 	result, err := runnable.Invoke(ctx, input)
 	duration := time.Since(start)
 
 	if err != nil {
-		fmt.Printf("Error running graph: %v\n", err)
+		logger.Error().Err(err).Msg("Error running graph")
 		return
 	}
 
+	logger.Info().Dur("processing_time", duration).Str("result", result.Response).Msg("Test processing completed successfully")
 	fmt.Printf("Result: %+v\n", result)
 	fmt.Printf("⏱️ Total time: %v\n", duration)
 }

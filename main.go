@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
 	"eino_llm_poc/src"
 	"eino_llm_poc/src/conversation"
 	"eino_llm_poc/src/llm/nlu"
+	"eino_llm_poc/src/logger"
 	"eino_llm_poc/src/model"
 
 	"github.com/cloudwego/eino-ext/components/model/openai"
@@ -40,7 +40,7 @@ const (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+		// Will use default values if .env not found
 	}
 
 	ctx := context.Background()
@@ -53,12 +53,18 @@ func main() {
 		return
 	}
 
+	// Initialize logger with configuration
+	if err := logger.InitLogger(config.LogConfig); err != nil {
+		fmt.Printf("Error initializing logger: %v\n", err)
+		return
+	}
+
 	// Setup conversation manager with config
 	conversationConfig := config.ConversationConfig
 
 	messagesManager, err := conversation.NewMessagesManager(ctx, conversationConfig)
 	if err != nil {
-		fmt.Printf("Error setting up conversation manager: %v\n", err)
+		logger.Error().Err(err).Msg("Error setting up conversation manager")
 		return
 	}
 
@@ -71,7 +77,7 @@ func main() {
 		MaxTokens:   &config.NLUConfig.MaxTokens,
 	})
 	if err != nil {
-		fmt.Printf("Error creating model: %v\n", err)
+		logger.Error().Err(err).Msg("Error creating model")
 		return
 	}
 
@@ -84,14 +90,14 @@ func main() {
 	)
 
 	inputConverterNLU := compose.InvokableLambda(func(ctx context.Context, input QueryInput) ([]*schema.Message, error) {
-		log.Printf("Customer %s: Processing query - %s", input.CustomerID, input.Query)
+		logger.Info().Str("customer_id", input.CustomerID).Str("query", input.Query).Msg("Processing query")
 		conversationCtx, err := messagesManager.ProcessNLUMessage(ctx, input.CustomerID, input.Query)
 		if err != nil {
-			log.Printf("Customer %s: Error getting conversation context: %v", input.CustomerID, err)
+			logger.Error().Str("customer_id", input.CustomerID).Err(err).Msg("Error getting conversation context")
 			return nil, err
 		}
 
-		log.Printf("Customer %s: Retrieved conversation context from Redis", input.CustomerID)
+		logger.Debug().Str("customer_id", input.CustomerID).Msg("Retrieved conversation context from Redis")
 
 		// Generate system prompt
 		systemPrompt := nlu.GetSystemTemplateProcessed(&config.NLUConfig)
@@ -108,7 +114,19 @@ func main() {
 			}
 			msg.Extra["customerID"] = input.CustomerID
 		}
-		log.Printf("Customer %s: inputConverterNode Messages: %v", input.CustomerID, messages)
+		logger.Debug().Str("customer_id", input.CustomerID).Int("message_count", len(messages)).Msg("Generated input converter messages")
+
+		// Pretty print messages for debugging
+		for i, msg := range messages {
+			// Print full content if not too long
+			content := msg.Content
+			logger.Debug().
+				Str("customer_id", input.CustomerID).
+				Int("message_index", i).
+				Str("role", string(msg.Role)).
+				Interface("extra", msg.Extra).
+				Msg("Message: " + content)
+		}
 		return messages, nil
 	})
 
@@ -125,14 +143,13 @@ func main() {
 
 	postHandlerNLU := func(ctx context.Context, out *schema.Message, state *State) (*schema.Message, error) {
 		customerID := state.CustomerID
-		log.Printf("Customer %s: Model response - %s", customerID,
-			out.Content[:(len(out.Content))])
+		logger.Debug().Str("customer_id", customerID).Int("response_length", len(out.Content)).Msg("Received model response")
 
 		// Save response to Redis
 		if err := messagesManager.SaveResponse(ctx, customerID, out.Content); err != nil {
-			log.Printf("Warning: Failed to save response to Redis for customer %s: %v", customerID, err)
+			logger.Warn().Str("customer_id", customerID).Err(err).Msg("Failed to save response to Redis")
 		} else {
-			log.Printf("Customer %s: Successfully saved response to Redis", customerID)
+			logger.Debug().Str("customer_id", customerID).Msg("Successfully saved response to Redis")
 		}
 		// Update history
 		state.History = append(state.History, out)
@@ -169,7 +186,7 @@ func main() {
 	// Compile graph
 	runnable, err := g.Compile(ctx)
 	if err != nil {
-		fmt.Printf("Error compiling graph: %v\n", err)
+		logger.Error().Err(err).Msg("Error compiling graph")
 		return
 	}
 
@@ -182,6 +199,8 @@ func main() {
 		{CustomerID: "1111", Query: "ขอบคุณนะครับ"},
 	}
 
+	logger.Info().Int("total_inputs", len(inputs)).Msg("Starting batch processing")
+
 	for i, input := range inputs {
 		fmt.Printf("\n=== Processing Input %d ===\n", i+1)
 		fmt.Printf("Input: CustomerID=%s, Query=%s\n", input.CustomerID, input.Query)
@@ -189,18 +208,60 @@ func main() {
 		start := time.Now()
 		result, err := runnable.Invoke(ctx, input)
 		if err != nil {
-			fmt.Printf("Error: %v\n", err)
+			logger.Error().Str("customer_id", input.CustomerID).Err(err).Msg("Error processing input")
 			continue
 		}
 
-		// Display results
-		if result.Result.PrimaryIntent != "" {
-			fmt.Printf("Primary Intent: %s, Language: %s, Score: %.3f\n",
-				result.Result.PrimaryIntent,
-				result.Result.PrimaryLanguage,
-				result.Result.ImportanceScore)
+		// Display detailed QueryOutput results
+		duration := time.Since(start)
+
+		// Log detailed parsing results summary
+		logger.Debug().Str("customer_id", input.CustomerID).
+			Int("intents_count", len(result.Result.Intents)).
+			Int("entities_count", len(result.Result.Entities)).
+			Int("languages_count", len(result.Result.Languages)).
+			Str("primary_intent", result.Result.PrimaryIntent).
+			Str("primary_language", result.Result.PrimaryLanguage).
+			Float64("importance_score", result.Result.ImportanceScore).
+			Str("sentiment_label", result.Result.Sentiment.Label).
+			Float64("sentiment_confidence", result.Result.Sentiment.Confidence).
+			Dur("processing_time", duration).
+			Msg("QueryOutput parsing summary")
+
+		// Log detailed intents
+		for i, intent := range result.Result.Intents {
+			logger.Debug().Str("customer_id", input.CustomerID).
+				Int("intent_index", i).
+				Str("intent_name", intent.Name).
+				Float64("intent_confidence", intent.Confidence).
+				Float64("intent_priority", intent.Priority).
+				Interface("intent_metadata", intent.Metadata).
+				Msg("Intent details")
 		}
 
-		fmt.Printf("⏱️ Time: %v\n", time.Since(start))
+		// Log detailed entities
+		for i, entity := range result.Result.Entities {
+			logger.Debug().Str("customer_id", input.CustomerID).
+				Int("entity_index", i).
+				Str("entity_type", entity.Type).
+				Str("entity_value", entity.Value).
+				Float64("entity_confidence", entity.Confidence).
+				Interface("entity_position", entity.Position).
+				Interface("entity_metadata", entity.Metadata).
+				Msg("Entity details")
+		}
+
+		// Log detailed languages
+		for i, language := range result.Result.Languages {
+			logger.Debug().Str("customer_id", input.CustomerID).
+				Int("language_index", i).
+				Str("language_code", language.Code).
+				Float64("language_confidence", language.Confidence).
+				Bool("is_primary", language.IsPrimary).
+				Interface("language_metadata", language.Metadata).
+				Msg("Language details")
+		}
 	}
+
+	logger.Info().Msg("Batch processing completed")
 }

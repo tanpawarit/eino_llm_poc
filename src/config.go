@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	LogConfig          model.LogConfig          `envconfig:""`
 	NLUConfig          model.NLUConfig          `envconfig:""`
 	ConversationConfig model.ConversationConfig `envconfig:""`
 }
